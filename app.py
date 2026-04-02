@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import cv2
 from PIL import Image
@@ -10,135 +11,6 @@ import zipfile
 import threading
 import random
 import base64
-import os
-import streamlit.components.v1 as components
-
-# --- 0. AUTO-BUILD CUSTOM UI COMPONENT ---
-# This bypasses all of Streamlit's broken libraries by creating our own bulletproof UI
-UI_DIR = "custom_ui"
-os.makedirs(UI_DIR, exist_ok=True)
-html_content = """
-<!DOCTYPE html>
-<html>
-<head>
-  <script src="https://cdn.jsdelivr.net/npm/streamlit-component-lib@1.3.0/dist/streamlit.js"></script>
-  <style>
-    body { margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; font-family: sans-serif; }
-    #container { position: relative; display: inline-block; }
-    canvas { cursor: crosshair; max-width: 1000px; height: auto; }
-    #drawLayer { position: absolute; top: 0; left: 0; pointer-events: none; }
-    .controls { margin-top: 10px; display: flex; gap: 10px; }
-    button { background: #ff4b4b; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-    p { color: white; margin: 0; padding: 8px 0; }
-  </style>
-</head>
-<body>
-  <div id="container">
-    <canvas id="bgLayer"></canvas>
-    <canvas id="drawLayer"></canvas>
-  </div>
-  <div class="controls" id="controls"></div>
-
-  <script>
-    const bgCanvas = document.getElementById("bgLayer");
-    const bgCtx = bgCanvas.getContext("2d");
-    const drawCanvas = document.getElementById("drawLayer");
-    const drawCtx = drawCanvas.getContext("2d");
-    const controls = document.getElementById("controls");
-
-    let mode = "points";
-    let points = [];
-    let isDrawing = false;
-    let img = new Image();
-
-    function onRender(event) {
-      if (img.src) return; // Only load once
-      const args = event.detail.args;
-      mode = args.mode;
-      img.src = args.image_b64;
-
-      img.onload = () => {
-        bgCanvas.width = img.width; bgCanvas.height = img.height;
-        drawCanvas.width = img.width; drawCanvas.height = img.height;
-        bgCtx.drawImage(img, 0, 0);
-        
-        // Match CSS sizing for alignment
-        const displayWidth = Math.min(1000, img.width);
-        bgCanvas.style.width = displayWidth + "px";
-        drawCanvas.style.width = displayWidth + "px";
-        
-        updateControls();
-        Streamlit.setFrameHeight(bgCanvas.getBoundingClientRect().height + 60);
-      }
-    }
-
-    function redrawPoints() {
-      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-      drawCtx.fillStyle = "#ff4b4b"; drawCtx.strokeStyle = "#ff4b4b"; drawCtx.lineWidth = 4;
-      points.forEach((p, i) => {
-        drawCtx.beginPath(); drawCtx.arc(p.x, p.y, 10, 0, Math.PI * 2); drawCtx.fill();
-        if (i > 0) { drawCtx.beginPath(); drawCtx.moveTo(points[i-1].x, points[i-1].y); drawCtx.lineTo(p.x, p.y); drawCtx.stroke(); }
-      });
-      if (points.length === 4) { drawCtx.beginPath(); drawCtx.moveTo(points[3].x, points[3].y); drawCtx.lineTo(points[0].x, points[0].y); drawCtx.stroke(); }
-    }
-
-    function updateControls() {
-      if (mode === "points") {
-        controls.innerHTML = `<p>📍 Points: ${points.length}/4</p>` +
-          (points.length > 0 ? `<button onclick="undoPoint()">Undo</button>` : "") +
-          (points.length === 4 ? `<button onclick="sendData()">Un-Warp Perspective</button>` : "");
-      } else {
-        controls.innerHTML = `<button onclick="sendData()">Confirm Mask</button> <button onclick="clearMask()">Clear</button>`;
-      }
-    }
-
-    bgCanvas.addEventListener("mousedown", (e) => {
-      const rect = bgCanvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (bgCanvas.width / rect.width);
-      const y = (e.clientY - rect.top) * (bgCanvas.height / rect.height);
-
-      if (mode === "points" && points.length < 4) {
-        points.push({x, y});
-        redrawPoints();
-        updateControls();
-      } else if (mode === "mask") {
-        isDrawing = true;
-        drawCtx.fillStyle = "rgba(255, 0, 0, 0.5)";
-        drawCtx.beginPath(); drawCtx.arc(x, y, 20, 0, Math.PI * 2); drawCtx.fill();
-      }
-    });
-
-    bgCanvas.addEventListener("mousemove", (e) => {
-      if (!isDrawing || mode !== "mask") return;
-      const rect = bgCanvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (bgCanvas.width / rect.width);
-      const y = (e.clientY - rect.top) * (bgCanvas.height / rect.height);
-      drawCtx.beginPath(); drawCtx.arc(x, y, 20, 0, Math.PI * 2); drawCtx.fill();
-    });
-
-    window.addEventListener("mouseup", () => { isDrawing = false; });
-
-    window.undoPoint = () => { points.pop(); redrawPoints(); updateControls(); }
-    window.clearMask = () => { drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height); }
-    window.sendData = () => {
-      if (mode === "points") Streamlit.setComponentValue({type: "points", data: points});
-      if (mode === "mask") Streamlit.setComponentValue({type: "mask", data: drawCanvas.toDataURL()});
-    }
-
-    Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
-    Streamlit.setComponentReady();
-  </script>
-</body>
-</html>
-"""
-with open(os.path.join(UI_DIR, "index.html"), "w", encoding="utf-8") as f: f.write(html_content)
-massingpro_ui = components.declare_component("massingpro_ui", path=UI_DIR)
-
-def pil_to_b64(img):
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=90)
-    return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
-# --------------------------------------------------------
 
 # --- BRANDING & PAGE SETUP ---
 st.set_page_config(page_title="MassingPro | Context Generator", page_icon="🏢", layout="wide")
@@ -160,6 +32,11 @@ def load_onnx_model():
     return ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider'])
 
 # --- 2. CORE UTILITIES ---
+def pil_to_b64(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
 def unwarp_facade(image_pil, src_points, physical_width, physical_height, output_res=1024):
     image_cv = np.array(image_pil)
     aspect_ratio = physical_width / float(physical_height)
@@ -170,7 +47,7 @@ def unwarp_facade(image_pil, src_points, physical_width, physical_height, output
     warped_cv = cv2.warpPerspective(image_cv, matrix, (out_w, out_h), flags=cv2.INTER_CUBIC)
     return Image.fromarray(warped_cv)
 
-def process_depth_and_normals(image_pil, mask_data, session, normal_strength):
+def process_depth_and_normals(image_pil, mask_b64, session, normal_strength):
     image_cv = np.array(image_pil)
     orig_h, orig_w = image_cv.shape[:2]
     img_resized = cv2.resize(image_cv, (518, 518), interpolation=cv2.INTER_CUBIC)
@@ -180,10 +57,22 @@ def process_depth_and_normals(image_pil, mask_data, session, normal_strength):
     depth_array = cv2.resize(np.squeeze(depth_out), (orig_w, orig_h), interpolation=cv2.INTER_CUBIC)
     depth_normalized = (depth_array - depth_array.min()) / (depth_array.max() - depth_array.min() + 1e-8)
     
-    if mask_data is not None:
-        binary_mask = np.where(mask_data[:, :, 3] > 0, 255, 0).astype(np.uint8)
-        if np.any(binary_mask):
-            depth_normalized = cv2.inpaint((depth_normalized * 255).astype(np.uint8), binary_mask, 3, cv2.INPAINT_NS).astype(np.float32) / 255.0
+    # Process the HTML Canvas Mask if provided
+    if mask_b64:
+        mask_bytes = base64.b64decode(mask_b64)
+        mask_np = cv2.imdecode(np.frombuffer(mask_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+        
+        # Ensure mask is scaled to original image dimensions
+        if mask_np is not None:
+            mask_resized = cv2.resize(mask_np, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+            # Use alpha channel if present, otherwise assume red channel is mask
+            if mask_resized.shape[2] == 4:
+                binary_mask = np.where(mask_resized[:, :, 3] > 0, 255, 0).astype(np.uint8)
+            else:
+                binary_mask = np.where(mask_resized[:, :, 2] > 0, 255, 0).astype(np.uint8) # BGR
+                
+            if np.any(binary_mask):
+                depth_normalized = cv2.inpaint((depth_normalized * 255).astype(np.uint8), binary_mask, 3, cv2.INPAINT_NS).astype(np.float32) / 255.0
 
     depth_filtered = cv2.bilateralFilter(depth_normalized, d=9, sigmaColor=0.05, sigmaSpace=75)
     sobel_x, sobel_y = cv2.Sobel(depth_filtered, cv2.CV_64F, 1, 0, ksize=3), cv2.Sobel(depth_filtered, cv2.CV_64F, 0, 1, ksize=3)
@@ -197,17 +86,17 @@ def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, fa
         mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2)
         return mesh
     if diffuse_img:
-        mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.8)
+        mat = material.PBRMaterial(name=f"{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.8)
         mesh.visual = texture.TextureVisuals(uv=uvs, material=mat)
     else:
-        mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
+        mat = material.PBRMaterial(name=f"{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
         mesh.visual = texture.TextureVisuals(uv=uvs, material=mat)
     return mesh
 
 # --- 3. UI APPLICATION ---
 st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
-for k in ['masks', 'warped']: 
+for k in ['masks', 'warped', 'pts_extracted']: 
     if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
 
 with st.sidebar:
@@ -230,33 +119,135 @@ for i, face in enumerate(faces):
             
             if st.session_state.warped[face] is None:
                 st.markdown("#### 1. Rectify Perspective")
-                st.caption("Click 4 corners (TL → TR → BR → BL)")
                 
-                # Render custom UI component in "points" mode
-                result = massingpro_ui(mode="points", image_b64=pil_to_b64(raw), key=f"ui_pts_{face}")
+                # --- ZERO LAG HTML CANVAS (Points) ---
+                canvas_w = min(800, raw.width)
+                canvas_h = int(raw.height * (canvas_w / raw.width))
+                img_b64 = pil_to_b64(raw.resize((canvas_w, canvas_h)))
                 
-                if result and result.get("type") == "points":
-                    pts = result["data"]
+                html_pts = f"""
+                <div style="font-family:sans-serif;color:white;">
+                    <p style="margin-bottom:8px;">📍 Click 4 corners (TL &rarr; TR &rarr; BR &rarr; BL).</p>
+                    <canvas id="c_{face}" width="{canvas_w}" height="{canvas_h}" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
+                    <button onclick="clearCanvas()" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear</button>
+                    <button onclick="sendPoints()" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Extract Perspective</button>
+                </div>
+                <script>
+                  const canvas = document.getElementById('c_{face}');
+                  const ctx = canvas.getContext('2d');
+                  let points = [];
+                  const img = new Image();
+                  img.src = 'data:image/png;base64,{img_b64}';
+                  img.onload = () => ctx.drawImage(img, 0, 0);
+                  
+                  canvas.addEventListener('mousedown', e => {{
+                      if (points.length >= 4) return;
+                      const r = canvas.getBoundingClientRect();
+                      const x = e.clientX - r.left; const y = e.clientY - r.top;
+                      points.push({{x: x, y: y}});
+                      drawState();
+                  }});
+                  
+                  function drawState() {{
+                      ctx.drawImage(img, 0, 0);
+                      ctx.fillStyle = '#ff4b4b'; ctx.strokeStyle = '#ff4b4b'; ctx.lineWidth = 3;
+                      for (let i=0; i<points.length; i++) {{
+                          ctx.beginPath(); ctx.arc(points[i].x, points[i].y, 6, 0, Math.PI*2); ctx.fill();
+                          ctx.stroke();
+                      }}
+                      if (points.length > 1) {{
+                          ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+                          for (let i=1; i<points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+                          if (points.length === 4) ctx.lineTo(points[0].x, points[0].y);
+                          ctx.stroke();
+                      }}
+                  }}
+                  
+                  function clearCanvas() {{ points = []; drawState(); }}
+                  
+                  function sendPoints() {{
+                      if (points.length !== 4) return alert('Please select exactly 4 points.');
+                      // Scale points back to original image size
+                      const scaleX = {raw.width} / {canvas_w};
+                      const scaleY = {raw.height} / {canvas_h};
+                      const finalPts = points.map(p => ({{x: p.x * scaleX, y: p.y * scaleY}}));
+                      window.parent.postMessage({{type: 'streamlit:setComponentValue', value: finalPts}}, '*');
+                  }}
+                </script>
+                """
+                pts_data = components.html(html_pts, height=canvas_h + 100, scrolling=False)
+                
+                if pts_data is not None:
                     w, h = face_dims[face]
-                    st.session_state.warped[face] = unwarp_facade(raw, pts, w, h)
+                    st.session_state.warped[face] = unwarp_facade(raw, pts_data, w, h)
                     st.rerun()
+
             else:
                 st.success("✅ Perspective Rectified")
-                if st.button("Edit Perspective", key=f"re_{face}"): 
-                    st.session_state.warped[face] = None; st.rerun()
-                
-                st.markdown("#### 2. Mask Occlusions (Optional)")
-                st.caption("Draw over trees/cars. Click 'Confirm Mask' to apply.")
                 w_img = st.session_state.warped[face]
                 
-                # Render custom UI component in "mask" mode
-                result = massingpro_ui(mode="mask", image_b64=pil_to_b64(w_img), key=f"ui_mask_{face}")
+                if st.button("Reset Perspective", key=f"re_{face}"): 
+                    st.session_state.warped[face] = None; st.session_state.masks[face] = None; st.rerun()
                 
-                if result and result.get("type") == "mask":
-                    # Convert base64 mask back to OpenCV numpy array
-                    encoded_data = result["data"].split(',')[1]
-                    nparr = np.frombuffer(base64.b64decode(encoded_data), np.uint8)
-                    st.session_state.masks[face] = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
+                st.markdown("##### 🖌️ Optional: Mask foreground objects (Trees/Cars) to flatten them.")
+                
+                # --- ZERO LAG HTML CANVAS (Masking) ---
+                canvas_w = min(800, w_img.width)
+                canvas_h = int(w_img.height * (canvas_w / w_img.width))
+                img_b64 = pil_to_b64(w_img.resize((canvas_w, canvas_h)))
+                
+                html_mask = f"""
+                <div style="font-family:sans-serif;color:white;">
+                    <canvas id="m_{face}" width="{canvas_w}" height="{canvas_h}" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
+                    <button onclick="clearMask()" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear Brush</button>
+                    <button onclick="sendMask()" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Save Mask</button>
+                </div>
+                <script>
+                  const canvas = document.getElementById('m_{face}');
+                  const ctx = canvas.getContext('2d');
+                  
+                  const offscreen = document.createElement('canvas');
+                  offscreen.width = {canvas_w}; offscreen.height = {canvas_h};
+                  const octx = offscreen.getContext('2d');
+                  
+                  const img = new Image();
+                  img.src = 'data:image/png;base64,{img_b64}';
+                  img.onload = () => {{ ctx.drawImage(img, 0, 0); }};
+                  
+                  let painting = false;
+                  canvas.addEventListener('mousedown', e => {{ painting = true; draw(e); }});
+                  canvas.addEventListener('mousemove', e => {{ if (painting) draw(e); }});
+                  canvas.addEventListener('mouseup', () => painting = false);
+                  canvas.addEventListener('mouseleave', () => painting = false);
+                  
+                  function draw(e) {{
+                      const r = canvas.getBoundingClientRect();
+                      const x = e.clientX - r.left; const y = e.clientY - r.top;
+                      
+                      // Draw red transparent overlay for user feedback
+                      ctx.fillStyle = 'rgba(255,0,0,0.4)';
+                      ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI * 2); ctx.fill();
+                      
+                      // Draw solid red onto hidden offscreen layer for actual extraction
+                      octx.fillStyle = 'rgba(255,0,0,1.0)';
+                      octx.beginPath(); octx.arc(x, y, 15, 0, Math.PI * 2); octx.fill();
+                  }}
+                  
+                  function clearMask() {{
+                      ctx.drawImage(img, 0, 0);
+                      octx.clearRect(0, 0, offscreen.width, offscreen.height);
+                  }}
+                  
+                  function sendMask() {{
+                      const maskB64 = offscreen.toDataURL('image/png').split(',')[1];
+                      window.parent.postMessage({{type: 'streamlit:setComponentValue', value: maskB64}}, '*');
+                  }}
+                </script>
+                """
+                mask_data = components.html(html_mask, height=canvas_h + 80, scrolling=False)
+                
+                if mask_data is not None:
+                    st.session_state.masks[face] = mask_data
                     st.success("Mask Saved!")
 
 st.divider()
