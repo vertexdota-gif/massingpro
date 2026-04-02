@@ -1,23 +1,4 @@
 import streamlit as st
-import base64
-from io import BytesIO
-
-# --- THE BULLETPROOF CANVAS PATCH ---
-def universal_b64_encoder(image, *args, **kwargs):
-    try:
-        buf = BytesIO()
-        image.convert("RGB").save(buf, format="PNG")
-        img_str = base64.b64encode(buf.getvalue()).decode()
-        return f"data:image/png;base64,{img_str}"
-    except Exception:
-        return ""
-
-import streamlit.elements.image as st_image
-import streamlit_drawable_canvas
-st_image.image_to_url = universal_b64_encoder
-streamlit_drawable_canvas.image_to_url = universal_b64_encoder
-# ------------------------------------
-
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw
@@ -27,9 +8,11 @@ from trimesh.visual import texture, material
 import io
 import zipfile
 import threading
+import random
 from streamlit_image_coordinates import streamlit_image_coordinates
 from streamlit_drawable_canvas import st_canvas
 
+# --- BRANDING & PAGE SETUP ---
 st.set_page_config(page_title="MassingPro | Architectural Context Generator", page_icon="🏢", layout="wide")
 
 st.markdown("""
@@ -39,6 +22,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# --- 1. CONCURRENCY & CACHING ---
 @st.cache_resource
 def get_lock(): return threading.Lock()
 generation_lock = get_lock()
@@ -47,6 +31,7 @@ generation_lock = get_lock()
 def load_onnx_model():
     return ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider'])
 
+# --- 2. CORE UTILITIES ---
 def unwarp_facade(image_pil, src_points, physical_width, physical_height, output_res=1024):
     image_cv = np.array(image_pil)
     aspect_ratio = physical_width / float(physical_height)
@@ -78,14 +63,18 @@ def process_depth_and_normals(image_pil, mask_data, session, normal_strength):
     normal_map = np.stack([((-(sobel_x * normal_strength) / mag + 1.0) * 127.5), (((-(sobel_y * normal_strength) / mag) + 1.0) * 127.5), ((1.0 / mag) * 255)], axis=2).astype(np.uint8)
     return Image.fromarray((depth_filtered * 65535.0).astype(np.uint16), mode='I;16'), Image.fromarray(normal_map, mode='RGB')
 
-def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba):
+def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, face_name, project_id):
     mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
     if diffuse_img:
-        mesh.visual = texture.TextureVisuals(uv=uvs, material=material.PBRMaterial(baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.8))
+        # INJECTING UNIQUE ID INTO MATERIAL NAME
+        mat = material.PBRMaterial(name=f"{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.8)
+        mesh.visual = texture.TextureVisuals(uv=uvs, material=mat)
     else:
-        mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2)
+        mat = material.PBRMaterial(name=f"{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
+        mesh.visual = texture.TextureVisuals(uv=uvs, material=mat)
     return mesh
 
+# --- 3. UI APPLICATION ---
 st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
 for k in ['masks', 'warped', 'clicks']: 
@@ -134,7 +123,6 @@ for i, face in enumerate(faces):
                 st.success("✅ Perspective Rectified")
                 w_img = st.session_state.warped[face]
                 
-                # NATIVE UI OVERRIDE: Force image display regardless of canvas background status
                 st.image(w_img, caption=f"{face} Elevation (Unwarped)", use_column_width=True)
                 
                 if st.button("Edit Perspective", key=f"re_{face}"): 
@@ -143,9 +131,10 @@ for i, face in enumerate(faces):
                 st.markdown("##### 🖌️ Optional: Mask foreground objects (Trees/Cars) to flatten them.")
                 canvas_w = min(1000, w_img.width)
                 canvas_h = int(w_img.height * (canvas_w / w_img.width))
+                
                 canvas = st_canvas(fill_color="rgba(255, 0, 0, 0.3)", stroke_width=20, stroke_color="#FF0000",
                                   background_image=w_img, update_streamlit=True, height=canvas_h, width=canvas_w,
-                                  drawing_mode="freedraw", key=f"canvas_v3_{face}")
+                                  drawing_mode="freedraw", key=f"canvas_v4_{face}")
                 
                 if canvas.image_data is not None:
                     st.session_state.masks[face] = cv2.resize(canvas.image_data, (w_img.width, w_img.height), interpolation=cv2.INTER_NEAREST)
@@ -162,44 +151,49 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
             session = load_onnx_model()
             blank_rgba = [int(blank_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)] + [255]
             meshes, displacements, normals = [], {}, {}
+            
+            # GENERATE UNIQUE PROJECT ID
+            project_id = str(random.randint(1000, 999999))
+            
+            # Y-UP ORIENTATION MATRICES (Stable)
             plane_verts = {
-                "Front": np.array([[0, 0, dim_z], [dim_x, 0, dim_z], [dim_x, 0, 0], [0, 0, 0]]),
-                "Back":  np.array([[dim_x, dim_y, dim_z], [0, dim_y, dim_z], [0, dim_y, 0], [dim_x, dim_y, 0]]),
-                "Left":  np.array([[0, dim_y, dim_z], [0, 0, dim_z], [0, 0, 0], [0, dim_y, 0]]),
-                "Right": np.array([[dim_x, 0, dim_z], [dim_x, dim_y, dim_z], [dim_x, dim_y, 0], [dim_x, 0, 0]]),
-                "Top":   np.array([[0, dim_y, dim_z], [dim_x, dim_y, dim_z], [dim_x, 0, dim_z], [0, 0, dim_z]]),
-                "Bot":   np.array([[0, 0, 0], [dim_x, 0, 0], [dim_x, dim_y, 0], [0, dim_y, 0]])
+                "Front": np.array([[0, dim_z, 0], [dim_x, dim_z, 0], [dim_x, 0, 0], [0, 0, 0]]),
+                "Back":  np.array([[dim_x, dim_z, -dim_y], [0, dim_z, -dim_y], [0, 0, -dim_y], [dim_x, 0, -dim_y]]),
+                "Left":  np.array([[0, dim_z, 0], [0, dim_z, -dim_y], [0, 0, -dim_y], [0, 0, 0]]),
+                "Right": np.array([[dim_x, dim_z, -dim_y], [dim_x, dim_z, 0], [dim_x, 0, 0], [dim_x, 0, -dim_y]]),
+                "Top":   np.array([[0, dim_z, 0], [dim_x, dim_z, 0], [dim_x, dim_z, -dim_y], [0, dim_z, -dim_y]]),
+                "Bot":   np.array([[0, 0, -dim_y], [dim_x, 0, -dim_y], [dim_x, 0, 0], [0, 0, 0]])
             }
+            
             for f in faces:
                 if st.session_state.warped[f]:
                     disp, norm = process_depth_and_normals(st.session_state.warped[f], st.session_state.masks[f], session, n_strength)
                     displacements[f] = disp
                     normals[f] = norm
-                    meshes.append(create_textured_plane(plane_verts[f], uv_coords, st.session_state.warped[f], norm, blank_rgba))
-                else: meshes.append(create_textured_plane(plane_verts[f], uv_coords, None, None, blank_rgba))
-            meshes.append(create_textured_plane(plane_verts["Top"], uv_coords, None, None, blank_rgba))
-            meshes.append(create_textured_plane(plane_verts["Bot"], uv_coords, None, None, blank_rgba))
+                    meshes.append(create_textured_plane(plane_verts[f], uv_coords, st.session_state.warped[f], norm, blank_rgba, f, project_id))
+                else: meshes.append(create_textured_plane(plane_verts[f], uv_coords, None, None, blank_rgba, f, project_id))
+            meshes.append(create_textured_plane(plane_verts["Top"], uv_coords, None, None, blank_rgba, "Top", project_id))
+            meshes.append(create_textured_plane(plane_verts["Bot"], uv_coords, None, None, blank_rgba, "Bot", project_id))
             
             scene = trimesh.Scene(meshes)
             glb = scene.export(file_type='glb')
             buf = io.BytesIO()
             
-            # --- PRO EXPORT PIPELINE: Giving you ALL the maps for Enscape/V-Ray ---
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("MassingPro_Geometry.glb", glb)
+                # Append Project ID to the GLB geometry file
+                zf.writestr(f"MassingPro_{project_id}.glb", glb)
+                
                 for f, img in displacements.items():
-                    # 1. Albedo (Diffuse)
+                    # Append Project ID to all extracted maps to prevent OS-level overwrite conflicts
                     albedo_buf = io.BytesIO(); st.session_state.warped[f].save(albedo_buf, format='JPEG')
-                    zf.writestr(f"Maps/{f}_Albedo.jpg", albedo_buf.getvalue())
+                    zf.writestr(f"Maps/{project_id}_{f}_Albedo.jpg", albedo_buf.getvalue())
                     
-                    # 2. 16-bit Displacement
                     disp_buf = io.BytesIO(); img.save(disp_buf, format='PNG')
-                    zf.writestr(f"Maps/{f}_Displacement_16bit.png", disp_buf.getvalue())
+                    zf.writestr(f"Maps/{project_id}_{f}_Displacement_16bit.png", disp_buf.getvalue())
                     
-                    # 3. Normal Map
                     norm_buf = io.BytesIO(); normals[f].save(norm_buf, format='PNG')
-                    zf.writestr(f"Maps/{f}_Normal.png", norm_buf.getvalue())
+                    zf.writestr(f"Maps/{project_id}_{f}_Normal.png", norm_buf.getvalue())
 
-            st.success("✅ Compilation Successful. Extract maps and link in host software.")
-            st.download_button("📦 DOWNLOAD PRO PACKAGE", data=buf.getvalue(), file_name="MassingPro_Asset.zip", mime="application/zip")
+            st.success(f"✅ Compilation Successful. Project ID: {project_id}")
+            st.download_button("📦 DOWNLOAD PRO PACKAGE", data=buf.getvalue(), file_name=f"MassingPro_{project_id}.zip", mime="application/zip")
     finally: generation_lock.release()
