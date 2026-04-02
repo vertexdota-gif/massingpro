@@ -1,0 +1,8 @@
+streamlit
+onnxruntime
+Pillow
+numpy
+opencv-python-headless
+streamlit-image-coordinates
+streamlit-drawable-canvas
+trimesh
