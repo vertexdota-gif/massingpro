@@ -3,19 +3,16 @@ import base64
 from io import BytesIO
 import streamlit_drawable_canvas
 
-# --- THE BASE64 BULLETPROOF PATCH ---
-# Bypasses Streamlit's broken cloud media manager by force-feeding 
-# the image directly to the browser frontend as a raw Data URI.
+# --- THE CORRECTED BASE64 INJECTION ---
 def base64_image_encoder(image, *args, **kwargs):
     buffered = BytesIO()
-    # Convert to RGB to prevent transparency channel crashes in JPEG
     image.convert("RGB").save(buffered, format="JPEG", quality=90)
     img_str = base64.b64encode(buffered.getvalue()).decode()
     return f"data:image/jpeg;base64,{img_str}"
 
-# Hijack the canvas component's internal image router
-streamlit_drawable_canvas._image_to_url = base64_image_encoder
-# ------------------------------------
+# Hijack the exact reference inside the canvas module (No underscore)
+streamlit_drawable_canvas.image_to_url = base64_image_encoder
+# --------------------------------------
 
 import numpy as np
 import cv2
