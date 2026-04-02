@@ -1,8 +1,8 @@
-streamlit
+streamlit>=1.30.0
 onnxruntime
 Pillow
 numpy
 opencv-python-headless
 streamlit-image-coordinates
-streamlit-drawable-canvas
+streamlit-drawable-canvas==0.9.3
 trimesh
