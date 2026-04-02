@@ -6,3 +6,4 @@ opencv-python-headless
 streamlit-image-coordinates
 streamlit-drawable-canvas==0.9.3
 trimesh
+scipy
