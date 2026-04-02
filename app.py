@@ -1,29 +1,4 @@
-import sys
-import base64
-from io import BytesIO
 import streamlit as st
-
-# --- BRUTE-FORCE NAMESPACE INJECTION ---
-def fake_image_to_url(image, *args, **kwargs):
-    buf = BytesIO()
-    image.convert("RGBA").save(buf, format="PNG")
-    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-
-try:
-    # Try injecting into the existing module if Streamlit kept the folder structure
-    import streamlit.elements.image as st_image
-    st_image.image_to_url = fake_image_to_url
-except ImportError:
-    # If Streamlit deleted the folder entirely, construct a ghost module in memory
-    import types
-    mock_module = types.ModuleType("streamlit.elements.image")
-    mock_module.image_to_url = fake_image_to_url
-    sys.modules["streamlit.elements.image"] = mock_module
-# ---------------------------------------
-
-# NOTE: The canvas library MUST be imported AFTER the injection above
-from streamlit_drawable_canvas import st_canvas
-
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw
@@ -91,7 +66,7 @@ def process_depth_and_normals(image_pil, mask_data, session, normal_strength):
 def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, face_name, project_id):
     mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
     
-    # Bottom layer logic: Strip materials entirely, just use bare vertex colors
+    # Strip materials from bottom layer
     if face_name == "Bot":
         mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2)
         return mesh
@@ -153,7 +128,6 @@ for i, face in enumerate(faces):
                 st.success("✅ Perspective Rectified")
                 w_img = st.session_state.warped[face]
                 
-                # FIXED: Changed from deprecated use_column_width to use_container_width
                 st.image(w_img, caption=f"{face} Elevation (Unwarped)", use_container_width=True)
                 
                 if st.button("Edit Perspective", key=f"re_{face}"): 
@@ -163,11 +137,10 @@ for i, face in enumerate(faces):
                 canvas_w = min(1000, w_img.width)
                 canvas_h = int(w_img.height * (canvas_w / w_img.width))
                 
-                # FORCE RGBA conversion for the canvas to prevent transparency-layer crashes
                 bg_for_canvas = w_img.convert("RGBA")
                 canvas = st_canvas(fill_color="rgba(255, 0, 0, 0.3)", stroke_width=20, stroke_color="#FF0000",
                                   background_image=bg_for_canvas, update_streamlit=True, height=canvas_h, width=canvas_w,
-                                  drawing_mode="freedraw", key=f"canvas_v5_{face}")
+                                  drawing_mode="freedraw", key=f"canvas_v6_{face}")
                 
                 if canvas.image_data is not None:
                     st.session_state.masks[face] = cv2.resize(canvas.image_data, (w_img.width, w_img.height), interpolation=cv2.INTER_NEAREST)
