@@ -1,4 +1,23 @@
 import streamlit as st
+import streamlit.elements.image as st_image
+
+# --- THE TRUE CANVAS PATCH ---
+# Injects the missing function exactly where the canvas library expects it.
+if not hasattr(st_image, "image_to_url"):
+    try:
+        from streamlit.elements.lib.image_utils import image_to_url
+        st_image.image_to_url = image_to_url
+    except ImportError:
+        # Ultimate fallback: Force a Base64 string if Streamlit completely removes the utility
+        import base64
+        from io import BytesIO
+        def fallback_encoder(image, *args, **kwargs):
+            buf = BytesIO()
+            image.convert("RGB").save(buf, format="JPEG")
+            return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+        st_image.image_to_url = fallback_encoder
+# ------------------------------
+
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw
