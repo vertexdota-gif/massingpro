@@ -1,7 +1,8 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import cv2
-from PIL import Image, ImageDraw
+from PIL import Image
 import onnxruntime as ort
 import trimesh
 from trimesh.visual import texture, material
@@ -9,8 +10,7 @@ import io
 import zipfile
 import threading
 import random
-from streamlit_image_coordinates import streamlit_image_coordinates
-from streamlit_drawable_canvas import st_canvas
+import base64
 
 # --- BRANDING & PAGE SETUP ---
 st.set_page_config(page_title="MassingPro | Context Generator", page_icon="🏢", layout="wide")
@@ -32,6 +32,11 @@ def load_onnx_model():
     return ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider'])
 
 # --- 2. CORE UTILITIES ---
+def pil_to_b64(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
 def unwarp_facade(image_pil, src_points, physical_width, physical_height, output_res=1024):
     image_cv = np.array(image_pil)
     aspect_ratio = physical_width / float(physical_height)
@@ -42,7 +47,7 @@ def unwarp_facade(image_pil, src_points, physical_width, physical_height, output
     warped_cv = cv2.warpPerspective(image_cv, matrix, (out_w, out_h), flags=cv2.INTER_CUBIC)
     return Image.fromarray(warped_cv)
 
-def process_depth_and_normals(image_pil, mask_data, session, normal_strength):
+def process_depth_and_normals(image_pil, mask_b64, session, normal_strength):
     image_cv = np.array(image_pil)
     orig_h, orig_w = image_cv.shape[:2]
     img_resized = cv2.resize(image_cv, (518, 518), interpolation=cv2.INTER_CUBIC)
@@ -52,10 +57,22 @@ def process_depth_and_normals(image_pil, mask_data, session, normal_strength):
     depth_array = cv2.resize(np.squeeze(depth_out), (orig_w, orig_h), interpolation=cv2.INTER_CUBIC)
     depth_normalized = (depth_array - depth_array.min()) / (depth_array.max() - depth_array.min() + 1e-8)
     
-    if mask_data is not None:
-        binary_mask = np.where(mask_data[:, :, 3] > 0, 255, 0).astype(np.uint8)
-        if np.any(binary_mask):
-            depth_normalized = cv2.inpaint((depth_normalized * 255).astype(np.uint8), binary_mask, 3, cv2.INPAINT_NS).astype(np.float32) / 255.0
+    # Process the HTML Canvas Mask if provided
+    if mask_b64:
+        mask_bytes = base64.b64decode(mask_b64)
+        mask_np = cv2.imdecode(np.frombuffer(mask_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+        
+        # Ensure mask is scaled to original image dimensions
+        if mask_np is not None:
+            mask_resized = cv2.resize(mask_np, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+            # Use alpha channel if present, otherwise assume red channel is mask
+            if mask_resized.shape[2] == 4:
+                binary_mask = np.where(mask_resized[:, :, 3] > 0, 255, 0).astype(np.uint8)
+            else:
+                binary_mask = np.where(mask_resized[:, :, 2] > 0, 255, 0).astype(np.uint8) # BGR
+                
+            if np.any(binary_mask):
+                depth_normalized = cv2.inpaint((depth_normalized * 255).astype(np.uint8), binary_mask, 3, cv2.INPAINT_NS).astype(np.float32) / 255.0
 
     depth_filtered = cv2.bilateralFilter(depth_normalized, d=9, sigmaColor=0.05, sigmaSpace=75)
     sobel_x, sobel_y = cv2.Sobel(depth_filtered, cv2.CV_64F, 1, 0, ksize=3), cv2.Sobel(depth_filtered, cv2.CV_64F, 0, 1, ksize=3)
@@ -65,25 +82,22 @@ def process_depth_and_normals(image_pil, mask_data, session, normal_strength):
 
 def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, face_name, project_id):
     mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
-    
-    # Strip materials from bottom layer
     if face_name == "Bot":
         mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2)
         return mesh
-
     if diffuse_img:
-        mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.8)
+        mat = material.PBRMaterial(name=f"{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.8)
         mesh.visual = texture.TextureVisuals(uv=uvs, material=mat)
     else:
-        mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
+        mat = material.PBRMaterial(name=f"{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
         mesh.visual = texture.TextureVisuals(uv=uvs, material=mat)
     return mesh
 
 # --- 3. UI APPLICATION ---
 st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
-for k in ['masks', 'warped', 'clicks']: 
-    if k not in st.session_state: st.session_state[k] = {f: [] if k=='clicks' else None for f in faces}
+for k in ['masks', 'warped', 'pts_extracted']: 
+    if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
 
 with st.sidebar:
     st.header("Project Dimensions")
@@ -102,48 +116,139 @@ for i, face in enumerate(faces):
         up_file = st.file_uploader(f"Upload {face}", type=["jpg", "png"], key=f"up_{face}")
         if up_file:
             raw = Image.open(up_file).convert("RGB")
+            
             if st.session_state.warped[face] is None:
-                hud_img = raw.copy()
-                draw = ImageDraw.Draw(hud_img)
-                pts = st.session_state.clicks[face]
-                for p in pts: draw.ellipse((p['x']-10, p['y']-10, p['x']+10, p['y']+10), fill="#ff4b4b", outline="white", width=2)
-                if len(pts) > 1:
-                    for j in range(len(pts)-1): draw.line([(pts[j]['x'], pts[j]['y']), (pts[j+1]['x'], pts[j+1]['y'])], fill="#ff4b4b", width=5)
-                if len(pts) == 4: draw.line([(pts[3]['x'], pts[3]['y']), (pts[0]['x'], pts[0]['y'])], fill="#ff4b4b", width=5)
+                st.markdown("#### 1. Rectify Perspective")
                 
-                st.write(f"Click 4 corners (TL, TR, BR, BL). Points: {len(pts)}/4")
-                coords = streamlit_image_coordinates(hud_img, key=f"coord_{face}")
-                if coords and (not pts or coords != pts[-1]) and len(pts) < 4:
-                    st.session_state.clicks[face].append(coords)
-                    st.rerun()
+                # --- ZERO LAG HTML CANVAS (Points) ---
+                canvas_w = min(800, raw.width)
+                canvas_h = int(raw.height * (canvas_w / raw.width))
+                img_b64 = pil_to_b64(raw.resize((canvas_w, canvas_h)))
                 
-                col1, col2 = st.columns(2)
-                if col1.button("Clear All", key=f"clr_{face}"): st.session_state.clicks[face] = []; st.rerun()
-                if len(pts) > 0 and col2.button("Undo Last", key=f"und_{face}"): st.session_state.clicks[face].pop(); st.rerun()
-                if len(pts) == 4 and st.button("Un-warp Elevation", key=f"uwp_{face}", type="primary"):
+                html_pts = f"""
+                <div style="font-family:sans-serif;color:white;">
+                    <p style="margin-bottom:8px;">📍 Click 4 corners (TL &rarr; TR &rarr; BR &rarr; BL).</p>
+                    <canvas id="c_{face}" width="{canvas_w}" height="{canvas_h}" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
+                    <button onclick="clearCanvas()" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear</button>
+                    <button onclick="sendPoints()" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Extract Perspective</button>
+                </div>
+                <script>
+                  const canvas = document.getElementById('c_{face}');
+                  const ctx = canvas.getContext('2d');
+                  let points = [];
+                  const img = new Image();
+                  img.src = 'data:image/png;base64,{img_b64}';
+                  img.onload = () => ctx.drawImage(img, 0, 0);
+                  
+                  canvas.addEventListener('mousedown', e => {{
+                      if (points.length >= 4) return;
+                      const r = canvas.getBoundingClientRect();
+                      const x = e.clientX - r.left; const y = e.clientY - r.top;
+                      points.push({{x: x, y: y}});
+                      drawState();
+                  }});
+                  
+                  function drawState() {{
+                      ctx.drawImage(img, 0, 0);
+                      ctx.fillStyle = '#ff4b4b'; ctx.strokeStyle = '#ff4b4b'; ctx.lineWidth = 3;
+                      for (let i=0; i<points.length; i++) {{
+                          ctx.beginPath(); ctx.arc(points[i].x, points[i].y, 6, 0, Math.PI*2); ctx.fill();
+                          ctx.stroke();
+                      }}
+                      if (points.length > 1) {{
+                          ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+                          for (let i=1; i<points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+                          if (points.length === 4) ctx.lineTo(points[0].x, points[0].y);
+                          ctx.stroke();
+                      }}
+                  }}
+                  
+                  function clearCanvas() {{ points = []; drawState(); }}
+                  
+                  function sendPoints() {{
+                      if (points.length !== 4) return alert('Please select exactly 4 points.');
+                      // Scale points back to original image size
+                      const scaleX = {raw.width} / {canvas_w};
+                      const scaleY = {raw.height} / {canvas_h};
+                      const finalPts = points.map(p => ({{x: p.x * scaleX, y: p.y * scaleY}}));
+                      window.parent.postMessage({{type: 'streamlit:setComponentValue', value: finalPts}}, '*');
+                  }}
+                </script>
+                """
+                pts_data = components.html(html_pts, height=canvas_h + 100, scrolling=False)
+                
+                if pts_data is not None:
                     w, h = face_dims[face]
-                    st.session_state.warped[face] = unwarp_facade(raw, pts, w, h)
+                    st.session_state.warped[face] = unwarp_facade(raw, pts_data, w, h)
                     st.rerun()
+
             else:
                 st.success("✅ Perspective Rectified")
                 w_img = st.session_state.warped[face]
                 
-                st.image(w_img, caption=f"{face} Elevation (Unwarped)", use_container_width=True)
-                
-                if st.button("Edit Perspective", key=f"re_{face}"): 
-                    st.session_state.warped[face] = None; st.rerun()
+                if st.button("Reset Perspective", key=f"re_{face}"): 
+                    st.session_state.warped[face] = None; st.session_state.masks[face] = None; st.rerun()
                 
                 st.markdown("##### 🖌️ Optional: Mask foreground objects (Trees/Cars) to flatten them.")
-                canvas_w = min(1000, w_img.width)
+                
+                # --- ZERO LAG HTML CANVAS (Masking) ---
+                canvas_w = min(800, w_img.width)
                 canvas_h = int(w_img.height * (canvas_w / w_img.width))
+                img_b64 = pil_to_b64(w_img.resize((canvas_w, canvas_h)))
                 
-                bg_for_canvas = w_img.convert("RGBA")
-                canvas = st_canvas(fill_color="rgba(255, 0, 0, 0.3)", stroke_width=20, stroke_color="#FF0000",
-                                  background_image=bg_for_canvas, update_streamlit=True, height=canvas_h, width=canvas_w,
-                                  drawing_mode="freedraw", key=f"canvas_v6_{face}")
+                html_mask = f"""
+                <div style="font-family:sans-serif;color:white;">
+                    <canvas id="m_{face}" width="{canvas_w}" height="{canvas_h}" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
+                    <button onclick="clearMask()" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear Brush</button>
+                    <button onclick="sendMask()" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Save Mask</button>
+                </div>
+                <script>
+                  const canvas = document.getElementById('m_{face}');
+                  const ctx = canvas.getContext('2d');
+                  
+                  const offscreen = document.createElement('canvas');
+                  offscreen.width = {canvas_w}; offscreen.height = {canvas_h};
+                  const octx = offscreen.getContext('2d');
+                  
+                  const img = new Image();
+                  img.src = 'data:image/png;base64,{img_b64}';
+                  img.onload = () => {{ ctx.drawImage(img, 0, 0); }};
+                  
+                  let painting = false;
+                  canvas.addEventListener('mousedown', e => {{ painting = true; draw(e); }});
+                  canvas.addEventListener('mousemove', e => {{ if (painting) draw(e); }});
+                  canvas.addEventListener('mouseup', () => painting = false);
+                  canvas.addEventListener('mouseleave', () => painting = false);
+                  
+                  function draw(e) {{
+                      const r = canvas.getBoundingClientRect();
+                      const x = e.clientX - r.left; const y = e.clientY - r.top;
+                      
+                      // Draw red transparent overlay for user feedback
+                      ctx.fillStyle = 'rgba(255,0,0,0.4)';
+                      ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI * 2); ctx.fill();
+                      
+                      // Draw solid red onto hidden offscreen layer for actual extraction
+                      octx.fillStyle = 'rgba(255,0,0,1.0)';
+                      octx.beginPath(); octx.arc(x, y, 15, 0, Math.PI * 2); octx.fill();
+                  }}
+                  
+                  function clearMask() {{
+                      ctx.drawImage(img, 0, 0);
+                      octx.clearRect(0, 0, offscreen.width, offscreen.height);
+                  }}
+                  
+                  function sendMask() {{
+                      const maskB64 = offscreen.toDataURL('image/png').split(',')[1];
+                      window.parent.postMessage({{type: 'streamlit:setComponentValue', value: maskB64}}, '*');
+                  }}
+                </script>
+                """
+                mask_data = components.html(html_mask, height=canvas_h + 80, scrolling=False)
                 
-                if canvas.image_data is not None:
-                    st.session_state.masks[face] = cv2.resize(canvas.image_data, (w_img.width, w_img.height), interpolation=cv2.INTER_NEAREST)
+                if mask_data is not None:
+                    st.session_state.masks[face] = mask_data
+                    st.success("Mask Saved!")
 
 st.divider()
 
