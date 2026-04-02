@@ -3,16 +3,15 @@ import base64
 from io import BytesIO
 
 # --- THE BULLETPROOF CANVAS PATCH ---
-# We bypass Streamlit's internal API completely. This function takes the image, 
-# converts it to a raw Base64 string, and swallows any mismatched arguments (*args, **kwargs) 
-# so Streamlit's layout objects can't crash the app.
 def universal_b64_encoder(image, *args, **kwargs):
-    buf = BytesIO()
-    image.convert("RGB").save(buf, format="PNG")
-    img_str = base64.b64encode(buf.getvalue()).decode()
-    return f"data:image/png;base64,{img_str}"
+    try:
+        buf = BytesIO()
+        image.convert("RGB").save(buf, format="PNG")
+        img_str = base64.b64encode(buf.getvalue()).decode()
+        return f"data:image/png;base64,{img_str}"
+    except Exception:
+        return ""
 
-# Inject into BOTH possible namespaces to guarantee interception
 import streamlit.elements.image as st_image
 import streamlit_drawable_canvas
 st_image.image_to_url = universal_b64_encoder
@@ -31,7 +30,6 @@ import threading
 from streamlit_image_coordinates import streamlit_image_coordinates
 from streamlit_drawable_canvas import st_canvas
 
-# --- BRANDING & PAGE SETUP ---
 st.set_page_config(page_title="MassingPro | Architectural Context Generator", page_icon="🏢", layout="wide")
 
 st.markdown("""
@@ -41,7 +39,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 1. CONCURRENCY & CACHING ---
 @st.cache_resource
 def get_lock(): return threading.Lock()
 generation_lock = get_lock()
@@ -50,7 +47,6 @@ generation_lock = get_lock()
 def load_onnx_model():
     return ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider'])
 
-# --- 2. CORE UTILITIES ---
 def unwarp_facade(image_pil, src_points, physical_width, physical_height, output_res=1024):
     image_cv = np.array(image_pil)
     aspect_ratio = physical_width / float(physical_height)
@@ -90,7 +86,6 @@ def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba):
         mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2)
     return mesh
 
-# --- 3. UI APPLICATION ---
 st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
 for k in ['masks', 'warped', 'clicks']: 
@@ -114,7 +109,6 @@ for i, face in enumerate(faces):
         if up_file:
             raw = Image.open(up_file).convert("RGB")
             if st.session_state.warped[face] is None:
-                # --- LIVE HUD FOR POINTS ---
                 hud_img = raw.copy()
                 draw = ImageDraw.Draw(hud_img)
                 pts = st.session_state.clicks[face]
@@ -138,14 +132,17 @@ for i, face in enumerate(faces):
                     st.rerun()
             else:
                 st.success("✅ Perspective Rectified")
+                w_img = st.session_state.warped[face]
+                
+                # NATIVE UI OVERRIDE: Force image display regardless of canvas background status
+                st.image(w_img, caption=f"{face} Elevation (Unwarped)", use_column_width=True)
+                
                 if st.button("Edit Perspective", key=f"re_{face}"): 
                     st.session_state.warped[face] = None; st.rerun()
                 
-                w_img = st.session_state.warped[face]
+                st.markdown("##### 🖌️ Optional: Mask foreground objects (Trees/Cars) to flatten them.")
                 canvas_w = min(1000, w_img.width)
                 canvas_h = int(w_img.height * (canvas_w / w_img.width))
-                
-                # Canvas will now render successfully using the base64 injector at the top of the file
                 canvas = st_canvas(fill_color="rgba(255, 0, 0, 0.3)", stroke_width=20, stroke_color="#FF0000",
                                   background_image=w_img, update_streamlit=True, height=canvas_h, width=canvas_w,
                                   drawing_mode="freedraw", key=f"canvas_v3_{face}")
@@ -161,10 +158,10 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
     generation_lock.acquire(blocking=True)
     queue_placeholder.empty()
     try:
-        with st.spinner("Processing AI Maps & Packaging GLB..."):
+        with st.spinner("Processing AI Maps & Packaging Full Pipeline Asset..."):
             session = load_onnx_model()
             blank_rgba = [int(blank_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)] + [255]
-            meshes, displacements = [], {}
+            meshes, displacements, normals = [], {}, {}
             plane_verts = {
                 "Front": np.array([[0, 0, dim_z], [dim_x, 0, dim_z], [dim_x, 0, 0], [0, 0, 0]]),
                 "Back":  np.array([[dim_x, dim_y, dim_z], [0, dim_y, dim_z], [0, dim_y, 0], [dim_x, dim_y, 0]]),
@@ -177,6 +174,7 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
                 if st.session_state.warped[f]:
                     disp, norm = process_depth_and_normals(st.session_state.warped[f], st.session_state.masks[f], session, n_strength)
                     displacements[f] = disp
+                    normals[f] = norm
                     meshes.append(create_textured_plane(plane_verts[f], uv_coords, st.session_state.warped[f], norm, blank_rgba))
                 else: meshes.append(create_textured_plane(plane_verts[f], uv_coords, None, None, blank_rgba))
             meshes.append(create_textured_plane(plane_verts["Top"], uv_coords, None, None, blank_rgba))
@@ -185,11 +183,23 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
             scene = trimesh.Scene(meshes)
             glb = scene.export(file_type='glb')
             buf = io.BytesIO()
+            
+            # --- PRO EXPORT PIPELINE: Giving you ALL the maps for Enscape/V-Ray ---
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("MassingPro_Asset.glb", glb)
+                zf.writestr("MassingPro_Geometry.glb", glb)
                 for f, img in displacements.items():
-                    img_buf = io.BytesIO(); img.save(img_buf, format='PNG')
-                    zf.writestr(f"Displacement_{f}_16bit.png", img_buf.getvalue())
-            st.success("✅ Compilation Successful.")
-            st.download_button("📦 DOWNLOAD PACKAGE", data=buf.getvalue(), file_name="MassingPro_Context.zip", mime="application/zip")
+                    # 1. Albedo (Diffuse)
+                    albedo_buf = io.BytesIO(); st.session_state.warped[f].save(albedo_buf, format='JPEG')
+                    zf.writestr(f"Maps/{f}_Albedo.jpg", albedo_buf.getvalue())
+                    
+                    # 2. 16-bit Displacement
+                    disp_buf = io.BytesIO(); img.save(disp_buf, format='PNG')
+                    zf.writestr(f"Maps/{f}_Displacement_16bit.png", disp_buf.getvalue())
+                    
+                    # 3. Normal Map
+                    norm_buf = io.BytesIO(); normals[f].save(norm_buf, format='PNG')
+                    zf.writestr(f"Maps/{f}_Normal.png", norm_buf.getvalue())
+
+            st.success("✅ Compilation Successful. Extract maps and link in host software.")
+            st.download_button("📦 DOWNLOAD PRO PACKAGE", data=buf.getvalue(), file_name="MassingPro_Asset.zip", mime="application/zip")
     finally: generation_lock.release()
