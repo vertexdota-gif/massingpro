@@ -1,22 +1,23 @@
 import streamlit as st
-import streamlit.elements.image as st_image
+import base64
+from io import BytesIO
 
-# --- THE TRUE CANVAS PATCH ---
-# Injects the missing function exactly where the canvas library expects it.
-if not hasattr(st_image, "image_to_url"):
-    try:
-        from streamlit.elements.lib.image_utils import image_to_url
-        st_image.image_to_url = image_to_url
-    except ImportError:
-        # Ultimate fallback: Force a Base64 string if Streamlit completely removes the utility
-        import base64
-        from io import BytesIO
-        def fallback_encoder(image, *args, **kwargs):
-            buf = BytesIO()
-            image.convert("RGB").save(buf, format="JPEG")
-            return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
-        st_image.image_to_url = fallback_encoder
-# ------------------------------
+# --- THE BULLETPROOF CANVAS PATCH ---
+# We bypass Streamlit's internal API completely. This function takes the image, 
+# converts it to a raw Base64 string, and swallows any mismatched arguments (*args, **kwargs) 
+# so Streamlit's layout objects can't crash the app.
+def universal_b64_encoder(image, *args, **kwargs):
+    buf = BytesIO()
+    image.convert("RGB").save(buf, format="PNG")
+    img_str = base64.b64encode(buf.getvalue()).decode()
+    return f"data:image/png;base64,{img_str}"
+
+# Inject into BOTH possible namespaces to guarantee interception
+import streamlit.elements.image as st_image
+import streamlit_drawable_canvas
+st_image.image_to_url = universal_b64_encoder
+streamlit_drawable_canvas.image_to_url = universal_b64_encoder
+# ------------------------------------
 
 import numpy as np
 import cv2
@@ -143,9 +144,12 @@ for i, face in enumerate(faces):
                 w_img = st.session_state.warped[face]
                 canvas_w = min(1000, w_img.width)
                 canvas_h = int(w_img.height * (canvas_w / w_img.width))
+                
+                # Canvas will now render successfully using the base64 injector at the top of the file
                 canvas = st_canvas(fill_color="rgba(255, 0, 0, 0.3)", stroke_width=20, stroke_color="#FF0000",
                                   background_image=w_img, update_streamlit=True, height=canvas_h, width=canvas_w,
                                   drawing_mode="freedraw", key=f"canvas_v3_{face}")
+                
                 if canvas.image_data is not None:
                     st.session_state.masks[face] = cv2.resize(canvas.image_data, (w_img.width, w_img.height), interpolation=cv2.INTER_NEAREST)
 
@@ -153,7 +157,7 @@ st.divider()
 
 if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", type="primary", use_container_width=True):
     queue_placeholder = st.empty()
-    if generation_lock.locked(): queue_placeholder.warning("⏳ Queue Active: Processing another professional's request...")
+    if generation_lock.locked(): queue_placeholder.warning("⏳ Queue Active: Processing another request...")
     generation_lock.acquire(blocking=True)
     queue_placeholder.empty()
     try:
