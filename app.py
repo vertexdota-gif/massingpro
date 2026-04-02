@@ -1,4 +1,21 @@
 import streamlit as st
+import base64
+from io import BytesIO
+
+# --- THE STREAMLIT 1.56.0 CANVAS SURVIVAL PATCH ---
+# Streamlit completely rewrote their image utility in v1.56+. 
+# This intercepts the new deep-level function and forces a base64 string.
+try:
+    import streamlit.elements.lib.image_utils as image_utils
+    def b64_encode_image(image, *args, **kwargs):
+        buf = BytesIO()
+        image.convert("RGBA").save(buf, format="PNG")
+        return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+    image_utils.image_to_url = b64_encode_image
+except ImportError:
+    pass
+# --------------------------------------------------
+
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw
@@ -13,7 +30,7 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 from streamlit_drawable_canvas import st_canvas
 
 # --- BRANDING & PAGE SETUP ---
-st.set_page_config(page_title="MassingPro | Architectural Context Generator", page_icon="🏢", layout="wide")
+st.set_page_config(page_title="MassingPro | Context Generator", page_icon="🏢", layout="wide")
 
 st.markdown("""
     <style>
@@ -65,12 +82,17 @@ def process_depth_and_normals(image_pil, mask_data, session, normal_strength):
 
 def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, face_name, project_id):
     mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
+    
+    # Bottom layer logic: Strip materials entirely, just use bare vertex colors
+    if face_name == "Bot":
+        mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2)
+        return mesh
+
     if diffuse_img:
-        # INJECTING UNIQUE ID INTO MATERIAL NAME
-        mat = material.PBRMaterial(name=f"{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.8)
+        mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.8)
         mesh.visual = texture.TextureVisuals(uv=uvs, material=mat)
     else:
-        mat = material.PBRMaterial(name=f"{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
+        mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
         mesh.visual = texture.TextureVisuals(uv=uvs, material=mat)
     return mesh
 
@@ -123,7 +145,8 @@ for i, face in enumerate(faces):
                 st.success("✅ Perspective Rectified")
                 w_img = st.session_state.warped[face]
                 
-                st.image(w_img, caption=f"{face} Elevation (Unwarped)", use_column_width=True)
+                # FIXED: Changed from deprecated use_column_width to use_container_width
+                st.image(w_img, caption=f"{face} Elevation (Unwarped)", use_container_width=True)
                 
                 if st.button("Edit Perspective", key=f"re_{face}"): 
                     st.session_state.warped[face] = None; st.rerun()
@@ -132,9 +155,11 @@ for i, face in enumerate(faces):
                 canvas_w = min(1000, w_img.width)
                 canvas_h = int(w_img.height * (canvas_w / w_img.width))
                 
+                # FORCE RGBA conversion for the canvas to prevent transparency-layer crashes
+                bg_for_canvas = w_img.convert("RGBA")
                 canvas = st_canvas(fill_color="rgba(255, 0, 0, 0.3)", stroke_width=20, stroke_color="#FF0000",
-                                  background_image=w_img, update_streamlit=True, height=canvas_h, width=canvas_w,
-                                  drawing_mode="freedraw", key=f"canvas_v4_{face}")
+                                  background_image=bg_for_canvas, update_streamlit=True, height=canvas_h, width=canvas_w,
+                                  drawing_mode="freedraw", key=f"canvas_v5_{face}")
                 
                 if canvas.image_data is not None:
                     st.session_state.masks[face] = cv2.resize(canvas.image_data, (w_img.width, w_img.height), interpolation=cv2.INTER_NEAREST)
@@ -151,11 +176,8 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
             session = load_onnx_model()
             blank_rgba = [int(blank_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)] + [255]
             meshes, displacements, normals = [], {}, {}
-            
-            # GENERATE UNIQUE PROJECT ID
             project_id = str(random.randint(1000, 999999))
             
-            # Y-UP ORIENTATION MATRICES (Stable)
             plane_verts = {
                 "Front": np.array([[0, dim_z, 0], [dim_x, dim_z, 0], [dim_x, 0, 0], [0, 0, 0]]),
                 "Back":  np.array([[dim_x, dim_z, -dim_y], [0, dim_z, -dim_y], [0, 0, -dim_y], [dim_x, 0, -dim_y]]),
@@ -180,17 +202,12 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
             buf = io.BytesIO()
             
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                # Append Project ID to the GLB geometry file
                 zf.writestr(f"MassingPro_{project_id}.glb", glb)
-                
                 for f, img in displacements.items():
-                    # Append Project ID to all extracted maps to prevent OS-level overwrite conflicts
                     albedo_buf = io.BytesIO(); st.session_state.warped[f].save(albedo_buf, format='JPEG')
                     zf.writestr(f"Maps/{project_id}_{f}_Albedo.jpg", albedo_buf.getvalue())
-                    
                     disp_buf = io.BytesIO(); img.save(disp_buf, format='PNG')
                     zf.writestr(f"Maps/{project_id}_{f}_Displacement_16bit.png", disp_buf.getvalue())
-                    
                     norm_buf = io.BytesIO(); normals[f].save(norm_buf, format='PNG')
                     zf.writestr(f"Maps/{project_id}_{f}_Normal.png", norm_buf.getvalue())
 
