@@ -12,9 +12,9 @@ import zipfile
 import threading
 import random
 import base64
+import json
 
 # --- DYNAMIC CUSTOM COMPONENTS ---
-# We force Python to build true bidirectional components on the fly to bypass Streamlit's return-value blocks.
 PTS_DIR = "pts_frontend"
 os.makedirs(PTS_DIR, exist_ok=True)
 with open(f"{PTS_DIR}/index.html", "w") as f:
@@ -150,7 +150,6 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
     </html>
     """)
 st_mask_drawer = components.declare_component("mask_drawer", path=MASK_DIR)
-# --------------------------------
 
 # --- BRANDING & PAGE SETUP ---
 st.set_page_config(page_title="MassingPro | Context Generator", page_icon="🏢", layout="wide")
@@ -259,7 +258,6 @@ for i, face in enumerate(faces):
                 canvas_h = int(raw.height * (canvas_w / raw.width))
                 img_b64 = pil_to_b64(raw.resize((canvas_w, canvas_h)))
                 
-                # --- TRUE BIDIRECTIONAL PTS PICKER ---
                 pts_data = st_pts_picker(
                     img_b64=img_b64, 
                     canvas_w=canvas_w, canvas_h=canvas_h, 
@@ -286,7 +284,6 @@ for i, face in enumerate(faces):
                 canvas_h = int(w_img.height * (canvas_w / w_img.width))
                 img_b64 = pil_to_b64(w_img.resize((canvas_w, canvas_h)))
                 
-                # --- TRUE BIDIRECTIONAL MASK DRAWER ---
                 mask_data = st_mask_drawer(
                     img_b64=img_b64, 
                     canvas_w=canvas_w, canvas_h=canvas_h, 
@@ -331,18 +328,54 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
             meshes.append(create_textured_plane(plane_verts["Bot"], uv_coords, None, None, blank_rgba, "Bot", project_id))
             
             scene = trimesh.Scene(meshes)
-            glb = scene.export(file_type='glb')
-            buf = io.BytesIO()
             
+            # --- CLAUDE'S FIX: EXPORT OBJ + MTL ---
+            obj_export = scene.export(file_type='obj')
+            
+            buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr(f"MassingPro_{project_id}.glb", glb)
+                
+                # Trimesh OBJ export returns a dict if multiple files (obj + mtl) are generated
+                if isinstance(obj_export, dict):
+                    for filename, data in obj_export.items():
+                        if isinstance(data, str): data = data.encode('utf-8')
+                        zf.writestr(f"Geometry/{filename}", data)
+                else:
+                    zf.writestr(f"Geometry/MassingPro_{project_id}.obj", obj_export)
+                
                 for f, img in displacements.items():
+                    mat_name = f"MassingPro_{project_id}_{f}"
+                    albedo_file = f"{mat_name}_Albedo.jpg"
+                    disp_file = f"{mat_name}_Displacement.png"
+                    norm_file = f"{mat_name}_Normal.png"
+                    
                     albedo_buf = io.BytesIO(); st.session_state.warped[f].save(albedo_buf, format='JPEG')
-                    zf.writestr(f"Maps/{project_id}_{f}_Albedo.jpg", albedo_buf.getvalue())
                     disp_buf = io.BytesIO(); img.save(disp_buf, format='PNG')
-                    zf.writestr(f"Maps/{project_id}_{f}_Displacement_16bit.png", disp_buf.getvalue())
                     norm_buf = io.BytesIO(); normals[f].save(norm_buf, format='PNG')
-                    zf.writestr(f"Maps/{project_id}_{f}_Normal.png", norm_buf.getvalue())
+                    
+                    # Store raw maps for backup
+                    zf.writestr(f"Maps/{albedo_file}", albedo_buf.getvalue())
+                    zf.writestr(f"Maps/{disp_file}", disp_buf.getvalue())
+                    zf.writestr(f"Maps/{norm_file}", norm_buf.getvalue())
+                    
+                    # --- CLAUDE'S FIX: AUTO-GENERATE .MATPKG ---
+                    matpkg_buf = io.BytesIO()
+                    with zipfile.ZipFile(matpkg_buf, "w", zipfile.ZIP_STORED) as matpkg_zip:
+                        matpkg_zip.writestr(albedo_file, albedo_buf.getvalue())
+                        matpkg_zip.writestr(disp_file, disp_buf.getvalue())
+                        matpkg_zip.writestr(norm_file, norm_buf.getvalue())
+                        
+                        enscape_json = {
+                            "name": mat_name,
+                            "type": "Generic",
+                            "albedo": {"textureFileName": albedo_file},
+                            "bump": {"textureFileName": norm_file},
+                            "displacement": {"textureFileName": disp_file}
+                        }
+                        matpkg_zip.writestr("material.json", json.dumps(enscape_json, indent=2))
+                    
+                    # Save the ready-to-import matpkg
+                    zf.writestr(f"Enscape_Ready/{mat_name}.matpkg", matpkg_buf.getvalue())
 
             st.success(f"✅ Compilation Successful. Project ID: {project_id}")
             st.download_button("📦 DOWNLOAD PRO PACKAGE", data=buf.getvalue(), file_name=f"MassingPro_{project_id}.zip", mime="application/zip")
