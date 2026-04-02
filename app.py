@@ -1,28 +1,14 @@
 import streamlit as st
-import base64
-from io import BytesIO
-import streamlit_drawable_canvas
-
-# --- THE CORRECTED BASE64 INJECTION ---
-def base64_image_encoder(image, *args, **kwargs):
-    buffered = BytesIO()
-    image.convert("RGB").save(buffered, format="JPEG", quality=90)
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return f"data:image/jpeg;base64,{img_str}"
-
-# Hijack the exact reference inside the canvas module (No underscore)
-streamlit_drawable_canvas.image_to_url = base64_image_encoder
-# --------------------------------------
-
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageDraw
 import onnxruntime as ort
 import trimesh
 from trimesh.visual import texture, material
 import io
 import zipfile
 import threading
+from streamlit_image_coordinates import streamlit_image_coordinates
 from streamlit_drawable_canvas import st_canvas
 
 # --- BRANDING & PAGE SETUP ---
@@ -87,8 +73,8 @@ def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba):
 # --- 3. UI APPLICATION ---
 st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
-for k in ['masks', 'warped']: 
-    if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
+for k in ['masks', 'warped', 'clicks']: 
+    if k not in st.session_state: st.session_state[k] = {f: [] if k=='clicks' else None for f in faces}
 
 with st.sidebar:
     st.header("Project Dimensions")
@@ -107,67 +93,48 @@ for i, face in enumerate(faces):
         up_file = st.file_uploader(f"Upload {face}", type=["jpg", "png"], key=f"up_{face}")
         if up_file:
             raw = Image.open(up_file).convert("RGB")
-            
             if st.session_state.warped[face] is None:
-                st.markdown("#### 1. Rectify Perspective")
-                st.info("📍 Click 4 corners (TL → TR → BR → BL). Use the trash can icon on the canvas to undo.")
+                # --- LIVE HUD FOR POINTS ---
+                hud_img = raw.copy()
+                draw = ImageDraw.Draw(hud_img)
+                pts = st.session_state.clicks[face]
+                for p in pts: draw.ellipse((p['x']-10, p['y']-10, p['x']+10, p['y']+10), fill="#ff4b4b", outline="white", width=2)
+                if len(pts) > 1:
+                    for j in range(len(pts)-1): draw.line([(pts[j]['x'], pts[j]['y']), (pts[j+1]['x'], pts[j+1]['y'])], fill="#ff4b4b", width=5)
+                if len(pts) == 4: draw.line([(pts[3]['x'], pts[3]['y']), (pts[0]['x'], pts[0]['y'])], fill="#ff4b4b", width=5)
                 
-                canvas_w = min(1000, raw.width)
-                canvas_h = int(raw.height * (canvas_w / raw.width))
+                st.write(f"Click 4 corners (TL, TR, BR, BL). Points: {len(pts)}/4")
+                coords = streamlit_image_coordinates(hud_img, key=f"coord_{face}")
+                if coords and (not pts or coords != pts[-1]) and len(pts) < 4:
+                    st.session_state.clicks[face].append(coords)
+                    st.rerun()
                 
-                # Using st_canvas for pure client-side point placement
-                canvas_pts = st_canvas(
-                    fill_color="rgba(255, 75, 75, 1)",
-                    stroke_color="rgba(255, 75, 75, 1)",
-                    background_image=raw,
-                    update_streamlit=True,
-                    height=canvas_h,
-                    width=canvas_w,
-                    drawing_mode="point",
-                    point_display_radius=6,
-                    key=f"canvas_pts_{face}"
-                )
-                
-                if canvas_pts.json_data is not None and "objects" in canvas_pts.json_data:
-                    objects = canvas_pts.json_data["objects"]
-                    points = [{"x": obj["left"], "y": obj["top"]} for obj in objects]
-                    
-                    st.write(f"**Points Selected:** {len(points)} / 4")
-                    
-                    if len(points) == 4:
-                        if st.button(f"Un-warp {face} Elevation", key=f"uwp_{face}", type="primary"):
-                            # Scale coordinates back to original image size
-                            sx = raw.width / canvas_w
-                            sy = raw.height / canvas_h
-                            scaled_pts = [{"x": p["x"] * sx, "y": p["y"] * sy} for p in points]
-                            
-                            w, h = face_dims[face]
-                            st.session_state.warped[face] = unwarp_facade(raw, scaled_pts, w, h)
-                            st.rerun()
+                col1, col2 = st.columns(2)
+                if col1.button("Clear All", key=f"clr_{face}"): st.session_state.clicks[face] = []; st.rerun()
+                if len(pts) > 0 and col2.button("Undo Last", key=f"und_{face}"): st.session_state.clicks[face].pop(); st.rerun()
+                if len(pts) == 4 and st.button("Un-warp Elevation", key=f"uwp_{face}", type="primary"):
+                    w, h = face_dims[face]
+                    st.session_state.warped[face] = unwarp_facade(raw, pts, w, h)
+                    st.rerun()
             else:
                 st.success("✅ Perspective Rectified")
                 if st.button("Edit Perspective", key=f"re_{face}"): 
                     st.session_state.warped[face] = None; st.rerun()
                 
-                st.markdown("#### 2. Mask Occlusions (Optional)")
                 w_img = st.session_state.warped[face]
                 canvas_w = min(1000, w_img.width)
                 canvas_h = int(w_img.height * (canvas_w / w_img.width))
-                
-                canvas_mask = st_canvas(
-                    fill_color="rgba(255, 0, 0, 0.3)", stroke_width=20, stroke_color="#FF0000",
-                    background_image=w_img, update_streamlit=True, height=canvas_h, width=canvas_w,
-                    drawing_mode="freedraw", key=f"canvas_mask_{face}"
-                )
-                
-                if canvas_mask.image_data is not None:
-                    st.session_state.masks[face] = cv2.resize(canvas_mask.image_data, (w_img.width, w_img.height), interpolation=cv2.INTER_NEAREST)
+                canvas = st_canvas(fill_color="rgba(255, 0, 0, 0.3)", stroke_width=20, stroke_color="#FF0000",
+                                  background_image=w_img, update_streamlit=True, height=canvas_h, width=canvas_w,
+                                  drawing_mode="freedraw", key=f"canvas_v3_{face}")
+                if canvas.image_data is not None:
+                    st.session_state.masks[face] = cv2.resize(canvas.image_data, (w_img.width, w_img.height), interpolation=cv2.INTER_NEAREST)
 
 st.divider()
 
 if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", type="primary", use_container_width=True):
     queue_placeholder = st.empty()
-    if generation_lock.locked(): queue_placeholder.warning("⏳ Queue Active: Processing another request...")
+    if generation_lock.locked(): queue_placeholder.warning("⏳ Queue Active: Processing another professional's request...")
     generation_lock.acquire(blocking=True)
     queue_placeholder.empty()
     try:
