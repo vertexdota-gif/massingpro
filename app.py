@@ -1,15 +1,21 @@
 import streamlit as st
+import base64
+from io import BytesIO
+import streamlit_drawable_canvas
 
-# --- MONKEY PATCH FOR STREAMLIT 1.56.0 CANVAS ERROR ---
-if not hasattr(st, "image_to_url"):
-    try:
-        from streamlit.elements.image import image_to_url
-        st.image_to_url = image_to_url
-    except ImportError:
-        def dummy_image_to_url(image, width, clamp, channels, format, image_id):
-            return st.runtime.get_instance().media_file_mgr.add(image, format, image_id)
-        st.image_to_url = dummy_image_to_url
-# ------------------------------------------------------
+# --- THE BASE64 BULLETPROOF PATCH ---
+# Bypasses Streamlit's broken cloud media manager by force-feeding 
+# the image directly to the browser frontend as a raw Data URI.
+def base64_image_encoder(image, *args, **kwargs):
+    buffered = BytesIO()
+    # Convert to RGB to prevent transparency channel crashes in JPEG
+    image.convert("RGB").save(buffered, format="JPEG", quality=90)
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/jpeg;base64,{img_str}"
+
+# Hijack the canvas component's internal image router
+streamlit_drawable_canvas._image_to_url = base64_image_encoder
+# ------------------------------------
 
 import numpy as np
 import cv2
