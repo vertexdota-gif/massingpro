@@ -1,20 +1,28 @@
-import streamlit as st
+import sys
 import base64
 from io import BytesIO
+import streamlit as st
 
-# --- THE STREAMLIT 1.56.0 CANVAS SURVIVAL PATCH ---
-# Streamlit completely rewrote their image utility in v1.56+. 
-# This intercepts the new deep-level function and forces a base64 string.
+# --- BRUTE-FORCE NAMESPACE INJECTION ---
+def fake_image_to_url(image, *args, **kwargs):
+    buf = BytesIO()
+    image.convert("RGBA").save(buf, format="PNG")
+    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+
 try:
-    import streamlit.elements.lib.image_utils as image_utils
-    def b64_encode_image(image, *args, **kwargs):
-        buf = BytesIO()
-        image.convert("RGBA").save(buf, format="PNG")
-        return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-    image_utils.image_to_url = b64_encode_image
+    # Try injecting into the existing module if Streamlit kept the folder structure
+    import streamlit.elements.image as st_image
+    st_image.image_to_url = fake_image_to_url
 except ImportError:
-    pass
-# --------------------------------------------------
+    # If Streamlit deleted the folder entirely, construct a ghost module in memory
+    import types
+    mock_module = types.ModuleType("streamlit.elements.image")
+    mock_module.image_to_url = fake_image_to_url
+    sys.modules["streamlit.elements.image"] = mock_module
+# ---------------------------------------
+
+# NOTE: The canvas library MUST be imported AFTER the injection above
+from streamlit_drawable_canvas import st_canvas
 
 import numpy as np
 import cv2
