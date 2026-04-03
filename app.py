@@ -213,10 +213,24 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             export_data = trimesh.Scene(meshes).export(file_type='obj')
+            obj_name = f"MassingPro_{project_id}.obj"
+            mtl_name = f"MassingPro_{project_id}.mtl"
             if isinstance(export_data, dict):
                 for fn, d in export_data.items():
-                    final_name = fn if "material" not in fn else f"MassingPro_{project_id}.mtl"
-                    zf.writestr(f"Geometry/{final_name}", d.encode('utf-8') if isinstance(d, str) else d)
+                    if fn.endswith('.obj'):
+                        # Patch the mtllib reference to use our canonical name
+                        text = d if isinstance(d, str) else d.decode('utf-8', errors='replace')
+                        for old_fn in export_data.keys():
+                            if old_fn.endswith('.mtl'):
+                                text = text.replace(f"mtllib {old_fn}", f"mtllib {mtl_name}")
+                        zf.writestr(f"Geometry/{obj_name}", text.encode('utf-8'))
+                    elif fn.endswith('.mtl'):
+                        zf.writestr(f"Geometry/{mtl_name}", d.encode('utf-8') if isinstance(d, str) else d)
+                    else:
+                        # Embedded textures from trimesh — write them alongside
+                        zf.writestr(f"Geometry/{fn}", d if isinstance(d, bytes) else d.encode('utf-8'))
+            elif isinstance(export_data, bytes):
+                zf.writestr(f"Geometry/{obj_name}", export_data)
             for f, img in displacements.items():
                 m_name = f"MassingPro_{project_id}_{f}"
                 a_f, d_f, n_f = f"{m_name}_Albedo.jpg", f"{m_name}_Displacement.png", f"{m_name}_Normal.png"
