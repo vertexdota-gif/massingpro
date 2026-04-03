@@ -213,6 +213,13 @@ if st.session_state.warped["Front"] and st.button("BUILD MASSING PRO ASSET", typ
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             export_data = trimesh.Scene(meshes).export(file_type='obj')
+            st.write(f"DEBUG export_data type: `{type(export_data)}`")
+            if isinstance(export_data, dict):
+                st.write(f"DEBUG dict keys: `{list(export_data.keys())}`")
+            elif isinstance(export_data, bytes):
+                st.write(f"DEBUG bytes length: `{len(export_data)}`")
+            else:
+                st.write(f"DEBUG unexpected: `{repr(export_data)[:200]}`")
             obj_name = f"MassingPro_{project_id}.obj"
             mtl_name = f"MassingPro_{project_id}.mtl"
             if isinstance(export_data, dict):
