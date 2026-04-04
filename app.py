@@ -285,6 +285,7 @@ if st.session_state.warped["Front"]:
                         ens_json = {
                             "Version": 1, "Name": m_name, "Type": 0, "DoubleSided": False,
                             "DiffuseColor": [1.0, 1.0, 1.0],
+			    "UseColorChannel": True,
                             "DiffuseTexture": {"File": a_f, "Transformation": None, "IsInverted": False, "Brightness": 1.0},
                             "ImageFade": 1.0,
                             "Opacity": 1.0,
