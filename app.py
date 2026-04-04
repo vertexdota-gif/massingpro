@@ -12,7 +12,6 @@ import zipfile
 import random
 import base64
 import json
-import requests
 
 # --- DYNAMIC CUSTOM COMPONENTS (ZERO-LAG UI) ---
 PTS_DIR = "pts_frontend"
@@ -50,10 +49,11 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
                     }
                 };
                 function drawState() {
-                    ctx.drawImage(img, 0, 0); ctx.fillStyle = '#ff4b4b'; ctx.strokeStyle = '#ff4b4b'; ctx.lineWidth = 3;
+                    ctx.drawImage(img, 0, 0); ctx.lineWidth = 3;
                     for (let i=0; i<points.length; i++) {
                         ctx.beginPath(); ctx.arc(points[i].x, points[i].y, 7, 0, Math.PI*2);
-                        ctx.fillStyle = dragging === i ? '#ffaa00' : '#ff4b4b'; ctx.fill(); ctx.stroke();
+                        ctx.fillStyle = dragging === i ? '#ffaa00' : '#ff4b4b'; ctx.fill();
+                        ctx.strokeStyle = '#ff4b4b'; ctx.stroke();
                     }
                     if (points.length > 1) {
                         ctx.strokeStyle = '#ff4b4b'; ctx.lineWidth = 2;
@@ -226,28 +226,8 @@ def detect_facade_corners(image_pil):
         pts = np.array([[mx, my], [w - mx, my], [w - mx, h - my], [mx, h - my]])
     return [{"x": float(p[0]), "y": float(p[1])} for p in pts]
 
-# --- STREET VIEW FETCH ---
-def fetch_street_view(address, api_key, heading=0, pitch=5, fov=90):
-    """Fetch a Street View image for the given address and camera heading.
-    Returns a PIL Image or (None, error_string)."""
-    url = (
-        f"https://maps.googleapis.com/maps/api/streetview"
-        f"?size=1024x768&location={requests.utils.quote(address)}"
-        f"&fov={fov}&heading={heading}&pitch={pitch}&key={api_key}"
-    )
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image"):
-            return Image.open(io.BytesIO(resp.content)).convert("RGB"), None
-        return None, f"Street View returned status {resp.status_code} — check address or API key."
-    except Exception as e:
-        return None, str(e)
-
 # --- RHINO SCRIPT GENERATOR ---
 def generate_rhino_script(project_id):
-    """Generate a Rhino Python script that auto-sets material textures.
-    Place the .py alongside the OBJ and textures, then run via
-    Rhino > Tools > Python Script > Run."""
     return f'''"""
 MassingPro Auto-Material Script
 Project ID : {project_id}
@@ -295,18 +275,13 @@ run()
 st.set_page_config(page_title="MassingPro", layout="wide")
 st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
-for k in ['masks', 'warped', 'raw', 'auto_pts']:
+for k in ['masks', 'warped', 'auto_pts']:
     if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
 
 with st.sidebar:
     st.header("Project Dimensions")
     dim_x, dim_y, dim_z = st.number_input("Width (X) m", 1.0, 55.0, value=10.0), st.number_input("Depth (Y) m", 1.0, 55.0, value=15.0), st.number_input("Height (Z) m", 1.0, 68.0, value=12.0)
     blank_color, n_strength = st.color_picker("Empty Face Color", "#2A2D35"), st.slider("Normal Intensity", 0.1, 5.0, 2.0)
-    st.divider()
-    with st.expander("🗺️ Street View API"):
-        st.caption("Paste your Google Maps API key to enable Street View fetch. Keep Billing > Street View Static API enabled.")
-        sv_key_default = st.secrets.get("GOOGLE_MAPS_API_KEY", "") if hasattr(st, "secrets") else ""
-        sv_api_key = st.text_input("API Key", value=sv_key_default, type="password", key="sv_api_key_input")
 
 tabs = st.tabs([f" {f} Facade" for f in faces])
 face_dims = {"Front": (dim_x, dim_z), "Back": (dim_x, dim_z), "Left": (dim_y, dim_z), "Right": (dim_y, dim_z)}
@@ -314,55 +289,22 @@ uv_coords = np.array([[0, 1], [1, 1], [1, 0], [0, 0]])
 
 for i, face in enumerate(faces):
     with tabs[i]:
-
-        # --- IMAGE SOURCE ---
-        source = st.radio("Source", ["📁 Upload", "🗺️ Street View"], key=f"src_{face}", horizontal=True)
-        raw = None
-
-        if source == "📁 Upload":
-            up_file = st.file_uploader(f"Upload {face}", type=["jpg", "png"], key=f"up_{face}")
-            if up_file:
-                raw = Image.open(up_file).convert("RGB")
-                st.session_state.raw[face] = raw
-        else:
-            sv_addr = st.text_input("Address or place name", key=f"sv_addr_{face}", placeholder="e.g. Empire State Building, New York")
-            sv_heading = st.slider("Camera heading (°)", 0, 359, 0, key=f"sv_h_{face}",
-                                   help="0=North  90=East  180=South  270=West")
-            sv_pitch = st.slider("Pitch (°)", -20, 20, 5, key=f"sv_p_{face}",
-                                 help="Tilt up (+) or down (−)")
-            if st.button("Fetch Street View", key=f"sv_fetch_{face}"):
-                if not sv_api_key:
-                    st.error("Add your Google Maps API key in the sidebar.")
-                elif not sv_addr:
-                    st.error("Enter an address.")
-                else:
-                    with st.spinner("Fetching…"):
-                        img_sv, err = fetch_street_view(sv_addr, sv_api_key, sv_heading, sv_pitch)
-                    if img_sv:
-                        st.session_state.raw[face] = img_sv
-                        st.session_state.warped[face] = None
-                        st.session_state.auto_pts[face] = None
-                        st.rerun()
-                    else:
-                        st.error(err)
-            if st.session_state.raw[face] is not None:
-                raw = st.session_state.raw[face]
-
-        # --- PERSPECTIVE PICKER ---
-        if raw is not None:
+        up_file = st.file_uploader(f"Upload {face}", type=["jpg", "png"], key=f"up_{face}")
+        if up_file:
+            raw = Image.open(up_file).convert("RGB")
             if st.session_state.warped[face] is None:
                 cw = min(800, raw.width)
                 ch = int(raw.height * (cw / raw.width))
 
-                # Auto-detect button
                 col_a, col_b = st.columns([1, 5])
                 with col_a:
                     if st.button("🎯 Auto-Detect", key=f"auto_{face}"):
                         st.session_state.auto_pts[face] = detect_facade_corners(raw)
                 with col_b:
-                    st.caption("Optional — or click the 4 corners manually on the canvas below.")
                     if st.session_state.auto_pts[face]:
-                        st.caption("✅ Auto-detected. Drag any point to refine, or Clear and click manually.")
+                        st.caption("✅ Corners auto-detected — drag to refine, or Clear and click manually.")
+                    else:
+                        st.caption("Optional shortcut. You can also click the 4 corners directly on the canvas.")
 
                 pts_data = st_pts_picker(
                     img_b64=pil_to_b64(raw.resize((cw, ch))),
@@ -379,7 +321,6 @@ for i, face in enumerate(faces):
                 st.image(st.session_state.warped[face], use_container_width=True)
                 if st.button("Reset Perspective", key=f"re_{face}"):
                     st.session_state.warped[face] = None
-                    st.session_state.raw[face] = None
                     st.session_state.auto_pts[face] = None
                     st.rerun()
                 cw = min(800, st.session_state.warped[face].width)

@@ -53,7 +53,7 @@ After uploading a photo, click **🎯 Auto-Detect** to auto-fill the four corner
 | Frontend | Streamlit + custom HTML/JS components |
 | Depth AI | ONNX Runtime · Depth-Anything-V2 ViT-S |
 | Geometry | trimesh · OpenCV |
-| Export | zipfile · PIL · rhino3dm (optional) |
+| Export | zipfile · PIL |
 
 ---
 
