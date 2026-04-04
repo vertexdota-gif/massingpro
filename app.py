@@ -259,8 +259,8 @@ def run():
         if os.path.exists(normal):
             tex = Rhino.DocObjects.Texture()
             tex.FileName = normal
+            tex.BumpScale = 1.0
             mat.SetBumpTexture(tex)
-            mat.BumpStrength = 1.0
 
         mat.CommitChanges()
         applied += 1
