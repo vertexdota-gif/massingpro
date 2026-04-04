@@ -197,8 +197,8 @@ if st.session_state.warped["Front"]:
     export_format = st.radio(
         "Choose your target software pipeline:",
         [
-            "Visual Model (.glb) - Best for Rhino/SketchUp Viewports",
-            "Render Model (.obj + .mtl) - Best for strict Enscape material replacement"
+            "Render Model (.obj + .mtl) - Best for strict Enscape material replacement",
+            "Visual Model (.glb) - Best for Rhino/SketchUp Viewports"
         ],
         horizontal=False
     )
@@ -252,6 +252,7 @@ if st.session_state.warped["Front"]:
                         if mtl_lines:
                             zf.writestr(f"Geometry/{mtl_name}", "\n".join(mtl_lines))
                     elif isinstance(export_data, dict):
+                        # This block ensures Rhino finds the textures in the Geometry folder
                         for fn, d in export_data.items():
                             if fn.endswith('.obj'):
                                 text = d if isinstance(d, str) else d.decode('utf-8', errors='replace')
@@ -262,6 +263,7 @@ if st.session_state.warped["Front"]:
                             elif fn.endswith('.mtl'):
                                 zf.writestr(f"Geometry/{mtl_name}", d.encode('utf-8') if isinstance(d, str) else d)
                             else:
+                                # This drops the Albedo files directly next to the OBJ for Rhino
                                 zf.writestr(f"Geometry/{fn}", d if isinstance(d, bytes) else d.encode('utf-8'))
                     elif isinstance(export_data, bytes):
                         zf.writestr(f"Geometry/{obj_name}", export_data)
@@ -278,14 +280,24 @@ if st.session_state.warped["Front"]:
                     mp_buf = io.BytesIO()
                     with zipfile.ZipFile(mp_buf, "w", zipfile.ZIP_STORED) as mpz:
                         mpz.writestr(a_f, ab.getvalue()); mpz.writestr(d_f, db.getvalue()); mpz.writestr(n_f, nb.getvalue())
+                        
+                        # --- THE ENSCAPE JSON FIX (ImageFade added) ---
                         ens_json = {
                             "Version": 1, "Name": m_name, "Type": 0, "DoubleSided": False,
                             "DiffuseColor": [1.0, 1.0, 1.0],
                             "DiffuseTexture": {"File": a_f, "Transformation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], "IsInverted": False, "Brightness": 1.0},
+                            "ImageFade": 1.0,
+                            "Opacity": 1.0,
+                            "MaskTexture": None,
+                            "TintColor": [1.0, 1.0, 1.0],
+                            "IsSolidGlass": False,
+                            "EmissiveColor": [1.0, 1.0, 1.0],
+                            "EmissiveStrength": 0.0,
                             "BumpTexture": {"File": n_f, "Transformation": None, "IsInverted": False, "Brightness": 1.0},
                             "BumpAmount": 1.0, "BumpMapType": 3,
-                            "Roughness": 0.9, "Metallic": 0.0, "Specular": 0.5,
-                            "RoughnessTexture": {"File": d_f, "Transformation": None, "IsInverted": False, "Brightness": 1.0}
+                            "Roughness": 0.9,
+                            "RoughnessTexture": {"File": d_f, "Transformation": None, "IsInverted": False, "Brightness": 1.0},
+                            "Metallic": 0.0, "Specular": 0.5, "Refraction": 1.5
                         }
                         mpz.writestr("material.json", json.dumps(ens_json, indent=2))
                     zf.writestr(f"Enscape_Ready/{m_name}.matpkg", mp_buf.getvalue())
