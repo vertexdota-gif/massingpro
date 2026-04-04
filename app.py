@@ -242,13 +242,18 @@ if st.session_state.warped["Front"]:
                         text = export_data if isinstance(export_data, str) else export_data.decode('utf-8', errors='replace')
                         text = text.replace("mtllib material.mtl", f"mtllib {mtl_name}")
                         zf.writestr(f"Geometry/{obj_name}", text.encode('utf-8'))
-                        mtl_lines = []
-                        for mesh in meshes:
-                            if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
-                                mat = mesh.visual.material
-                                mat_name = getattr(mat, 'name', None)
-                                if mat_name:
-                                    mtl_lines += [f"newmtl {mat_name}", "Ka 1.0 1.0 1.0", "Kd 1.0 1.0 1.0", "Ks 0.0 0.0 0.0", "d 1.0", "illum 2", ""]
+mtl_lines = []
+for mesh in meshes:
+    if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
+        mat = mesh.visual.material
+        mat_name = getattr(mat, 'name', None)
+        if mat_name:
+            entry = [f"newmtl {mat_name}", "Ka 1.0 1.0 1.0", "Kd 1.0 1.0 1.0",
+                     "Ks 0.0 0.0 0.0", "d 1.0", "illum 2"]
+            if not mat_name.endswith('_Blank'):
+                entry.append(f"map_Kd {mat_name}_Albedo.jpg")
+            entry.append("")
+            mtl_lines += entry
                         if mtl_lines:
                             zf.writestr(f"Geometry/{mtl_name}", "\n".join(mtl_lines))
                     elif isinstance(export_data, dict):
@@ -275,7 +280,7 @@ if st.session_state.warped["Front"]:
                     ab, db, nb = io.BytesIO(), io.BytesIO(), io.BytesIO()
                     st.session_state.warped[f].save(ab, format='JPEG', quality=95, subsampling=0); img.save(db, format='PNG'); normals[f].save(nb, format='PNG')
                     
-                    zf.writestr(f"Maps/{a_f}", ab.getvalue()); zf.writestr(f"Maps/{d_f}", db.getvalue()); zf.writestr(f"Maps/{n_f}", nb.getvalue())
+                    zf.writestr(f"Maps/{a_f}", ab.getvalue()); zf.writestr(f"Geometry/{a_f}", ab.getvalue()); zf.writestr(f"Maps/{d_f}", db.getvalue()); zf.writestr(f"Maps/{n_f}", nb.getvalue())
                     
                     mp_buf = io.BytesIO()
                     with zipfile.ZipFile(mp_buf, "w", zipfile.ZIP_STORED) as mpz:
