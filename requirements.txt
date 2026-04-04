@@ -5,3 +5,4 @@ numpy
 opencv-python-headless
 trimesh
 scipy
+rhino3dm

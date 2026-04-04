@@ -13,6 +13,8 @@ import threading
 import random
 import base64
 import json
+import tempfile
+import rhino3dm
 
 # --- DYNAMIC CUSTOM COMPONENTS (ZERO-LAG UI) ---
 PTS_DIR = "pts_frontend"
@@ -157,6 +159,49 @@ def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, fa
     mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.9) if diffuse_img else material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
     mesh.visual = texture.TextureVisuals(uv=uvs, material=mat); return mesh
 
+def build_3dm(meshes):
+    """Convert a list of trimesh objects to a rhino3dm File3dm byte payload.
+    Material names and UV coordinates are preserved for Enscape linking."""
+    model = rhino3dm.File3dm()
+    for mesh in meshes:
+        mat_name = None
+        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
+            mat_name = getattr(mesh.visual.material, 'name', None)
+
+        r_mesh = rhino3dm.Mesh()
+        
+        for v in mesh.vertices:
+            r_mesh.Vertices.Add(float(v[0]), float(v[1]), float(v[2]))
+            
+        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv'):
+            for uv in mesh.visual.uv:
+                r_mesh.TextureCoordinates.Add(float(uv[0]), float(uv[1]))
+                
+        for f in mesh.faces:
+            if len(f) == 3:
+                r_mesh.Faces.AddFace(int(f[0]), int(f[1]), int(f[2]))
+            else:
+                r_mesh.Faces.AddFace(int(f[0]), int(f[1]), int(f[2]), int(f[3]))
+
+        attrs = rhino3dm.ObjectAttributes()
+        if mat_name:
+            r_mat = rhino3dm.Material()
+            r_mat.Name = mat_name
+            mat_idx = model.Materials.Add(r_mat)
+            attrs.MaterialIndex = mat_idx
+            attrs.MaterialSource = rhino3dm.ObjectMaterialSource.MaterialFromObject
+            attrs.Name = mat_name
+
+        model.Objects.AddMesh(r_mesh, attrs)
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.3dm', delete=False)
+    tmp.close()
+    model.Write(tmp.name, 7)
+    with open(tmp.name, 'rb') as fh:
+        data = fh.read()
+    os.unlink(tmp.name)
+    return data
+
 # --- UI APP ---
 st.set_page_config(page_title="MassingPro", layout="wide")
 st.title("MassingPro")
@@ -196,7 +241,11 @@ if st.session_state.warped["Front"]:
     st.markdown("### 📦 Export Options")
     export_format = st.radio(
         "Choose your target software pipeline:",
-        ["Visual Model (.glb) - Best for Rhino/SketchUp Viewports", "Render Model (.obj + .mtl) - Best for strict Enscape material replacement"],
+        [
+            "Native Rhino (.3dm) - Direct Rhino import with Enscape material names preserved",
+            "Render Model (.obj + .mtl) - Best for strict Enscape material replacement",
+            "Visual Model (.glb) - Best for Rhino/SketchUp Viewports"
+        ],
         horizontal=False
     )
     
@@ -227,7 +276,10 @@ if st.session_state.warped["Front"]:
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 
                 # --- CONDITIONAL GEOMETRY EXPORT ---
-                if "glb" in export_format.lower():
+                if "3dm" in export_format.lower():
+                    tdm_data = build_3dm(meshes)
+                    zf.writestr(f"Geometry/MassingPro_{project_id}.3dm", tdm_data)
+                elif "glb" in export_format.lower():
                     glb_data = scene.export(file_type='glb')
                     zf.writestr(f"Geometry/MassingPro_{project_id}.glb", glb_data)
                 else:
