@@ -266,7 +266,7 @@ def run():
         applied += 1
 
     doc.Views.Redraw()
-    print(f"MassingPro: Applied textures to {{applied}} material(s).")
+    print("MassingPro: Applied textures to {} material(s).".format(applied))
 
 run()
 '''
