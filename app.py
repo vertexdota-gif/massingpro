@@ -9,11 +9,10 @@ import trimesh
 from trimesh.visual import texture, material
 import io
 import zipfile
-import threading
 import random
 import base64
 import json
-
+ 
 # --- DYNAMIC CUSTOM COMPONENTS (ZERO-LAG UI) ---
 PTS_DIR = "pts_frontend"
 os.makedirs(PTS_DIR, exist_ok=True)
@@ -66,7 +65,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
     </html>
     """)
 st_pts_picker = components.declare_component("pts_picker", path=PTS_DIR)
-
+ 
 MASK_DIR = "mask_frontend"
 os.makedirs(MASK_DIR, exist_ok=True)
 with open(f"{MASK_DIR}/index.html", "w") as f:
@@ -118,11 +117,11 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
     </html>
     """)
 st_mask_drawer = components.declare_component("mask_drawer", path=MASK_DIR)
-
+ 
 # --- CORE UTILITIES ---
 def pil_to_b64(img: Image.Image) -> str:
     buf = io.BytesIO(); img.save(buf, format="PNG"); return base64.b64encode(buf.getvalue()).decode()
-
+ 
 def unwarp_facade(image_pil, src_points, physical_width, physical_height, output_res=1024):
     image_cv = np.array(image_pil); aspect_ratio = physical_width / float(physical_height)
     out_w, out_h = (output_res, int(output_res / aspect_ratio)) if aspect_ratio > 1.0 else (int(output_res * aspect_ratio), output_res)
@@ -130,7 +129,7 @@ def unwarp_facade(image_pil, src_points, physical_width, physical_height, output
     dst_pts = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype="float32")
     matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
     return Image.fromarray(cv2.warpPerspective(image_cv, matrix, (out_w, out_h), flags=cv2.INTER_CUBIC))
-
+ 
 def process_depth_and_normals(image_pil, mask_b64, session, normal_strength):
     image_cv = np.array(image_pil); orig_h, orig_w = image_cv.shape[:2]
     img_resized = cv2.resize(image_cv, (518, 518), interpolation=cv2.INTER_CUBIC)
@@ -150,29 +149,29 @@ def process_depth_and_normals(image_pil, mask_b64, session, normal_strength):
     mag = np.sqrt((sobel_x * normal_strength)**2 + (sobel_y * normal_strength)**2 + 1.0)
     normal_map = np.stack([((-(sobel_x * normal_strength) / mag + 1.0) * 127.5), (((-(sobel_y * normal_strength) / mag) + 1.0) * 127.5), ((1.0 / mag) * 255)], axis=2).astype(np.uint8)
     return Image.fromarray((depth_filtered * 65535.0).astype(np.uint16), mode='I;16'), Image.fromarray(normal_map, mode='RGB')
-
+ 
 def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, face_name, project_id):
     mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
     if face_name == "Bot": mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2); return mesh
     mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.9) if diffuse_img else material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
     mesh.visual = texture.TextureVisuals(uv=uvs, material=mat); return mesh
-
+ 
 # --- UI APP ---
 st.set_page_config(page_title="MassingPro", layout="wide")
 st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
-for k in ['masks', 'warped']: 
+for k in ['masks', 'warped']:
     if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
-
+ 
 with st.sidebar:
     st.header("Project Dimensions")
     dim_x, dim_y, dim_z = st.number_input("Width (X) m", 1.0, 55.0, value=10.0), st.number_input("Depth (Y) m", 1.0, 55.0, value=15.0), st.number_input("Height (Z) m", 1.0, 68.0, value=12.0)
     blank_color, n_strength = st.color_picker("Empty Face Color", "#2A2D35"), st.slider("Normal Intensity", 0.1, 5.0, 2.0)
-
+ 
 tabs = st.tabs([f" {f} Facade" for f in faces])
 face_dims = {"Front": (dim_x, dim_z), "Back": (dim_x, dim_z), "Left": (dim_y, dim_z), "Right": (dim_y, dim_z)}
-uv_coords = np.array([[0, 1], [1, 1], [1, 0], [0, 0]]) 
-
+uv_coords = np.array([[0, 1], [1, 1], [1, 0], [0, 0]])
+ 
 for i, face in enumerate(faces):
     with tabs[i]:
         up_file = st.file_uploader(f"Upload {face}", type=["jpg", "png"], key=f"up_{face}")
@@ -188,9 +187,9 @@ for i, face in enumerate(faces):
                 cw, ch = min(800, st.session_state.warped[face].width), int(st.session_state.warped[face].height * (min(800, st.session_state.warped[face].width) / st.session_state.warped[face].width))
                 mask_data = st_mask_drawer(img_b64=pil_to_b64(st.session_state.warped[face].resize((cw, ch))), canvas_w=cw, canvas_h=ch, key=f"mask_{face}")
                 if mask_data: st.session_state.masks[face] = mask_data; st.success("✅ Mask Saved!")
-
+ 
 st.divider()
-
+ 
 # --- USER FORMAT SELECTION ---
 if st.session_state.warped["Front"]:
     st.markdown("### 📦 Export Options")
@@ -202,12 +201,12 @@ if st.session_state.warped["Front"]:
         ],
         horizontal=False
     )
-    
+ 
     if st.button("BUILD MASSING PRO ASSET", type="primary", use_container_width=True):
         with st.spinner("Compiling Package..."):
             session, project_id = ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider']), str(random.randint(1000, 999999))
             blank_rgba, meshes, displacements, normals = [int(blank_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)] + [255], [], {}, {}
-            
+ 
             plane_verts = {
                 "Front": np.array([[0, dim_z, 0], [dim_x, dim_z, 0], [dim_x, 0, 0], [0, 0, 0]]),
                 "Back":  np.array([[dim_x, dim_z, -dim_y], [0, dim_z, -dim_y], [0, 0, -dim_y], [dim_x, 0, -dim_y]]),
@@ -221,76 +220,93 @@ if st.session_state.warped["Front"]:
                     disp, norm = process_depth_and_normals(st.session_state.warped[f], st.session_state.masks[f], session, n_strength)
                     displacements[f], normals[f] = disp, norm
                     meshes.append(create_textured_plane(plane_verts[f], uv_coords, st.session_state.warped[f], norm, blank_rgba, f, project_id))
-                else: meshes.append(create_textured_plane(plane_verts[f], uv_coords, None, None, blank_rgba, f, project_id))
-            meshes.extend([create_textured_plane(plane_verts["Top"], uv_coords, None, None, blank_rgba, "Top", project_id), create_textured_plane(plane_verts["Bot"], uv_coords, None, None, blank_rgba, "Bot", project_id)])
-            
+                else:
+                    meshes.append(create_textured_plane(plane_verts[f], uv_coords, None, None, blank_rgba, f, project_id))
+            meshes.extend([
+                create_textured_plane(plane_verts["Top"], uv_coords, None, None, blank_rgba, "Top", project_id),
+                create_textured_plane(plane_verts["Bot"], uv_coords, None, None, blank_rgba, "Bot", project_id)
+            ])
+ 
             scene = trimesh.Scene(meshes)
-            
+ 
+            # --- PRE-RENDER IMAGE BUFFERS (shared by OBJ albedos, and matpkg) ---
+            img_buffers = {}  # face -> (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes)
+            for f, disp_img in displacements.items():
+                m_name = f"MassingPro_{project_id}_{f}"
+                a_f = f"{m_name}_Albedo.jpg"
+                d_f = f"{m_name}_Displacement.png"
+                n_f = f"{m_name}_Normal.png"
+                ab, db, nb = io.BytesIO(), io.BytesIO(), io.BytesIO()
+                st.session_state.warped[f].save(ab, format='JPEG', quality=95, subsampling=0)
+                disp_img.save(db, format='PNG')
+                normals[f].save(nb, format='PNG')
+                img_buffers[f] = (m_name, a_f, d_f, n_f, ab.getvalue(), db.getvalue(), nb.getvalue())
+ 
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                
-                # --- CONDITIONAL GEOMETRY EXPORT ---
+ 
+                # --- GEOMETRY EXPORT (all files flat in ZIP root) ---
                 if "glb" in export_format.lower():
-                    glb_data = scene.export(file_type='glb')
-                    zf.writestr(f"Geometry/MassingPro_{project_id}.glb", glb_data)
+                    zf.writestr(f"MassingPro_{project_id}.glb", scene.export(file_type='glb'))
                 else:
-                    export_data = scene.export(file_type='obj')
                     obj_name = f"MassingPro_{project_id}.obj"
                     mtl_name = f"MassingPro_{project_id}.mtl"
-                    
-                    if isinstance(export_data, (str, bytes)):
-                        text = export_data if isinstance(export_data, str) else export_data.decode('utf-8', errors='replace')
-                        text = text.replace("mtllib material.mtl", f"mtllib {mtl_name}")
-                        zf.writestr(f"Geometry/{obj_name}", text.encode('utf-8'))
-mtl_lines = []
-for mesh in meshes:
-    if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
-        mat = mesh.visual.material
-        mat_name = getattr(mat, 'name', None)
-        if mat_name:
-            entry = [f"newmtl {mat_name}", "Ka 1.0 1.0 1.0", "Kd 1.0 1.0 1.0",
-                     "Ks 0.0 0.0 0.0", "d 1.0", "illum 2"]
-            if not mat_name.endswith('_Blank'):
-                entry.append(f"map_Kd {mat_name}_Albedo.jpg")
-            entry.append("")
-            mtl_lines += entry
-                        if mtl_lines:
-                            zf.writestr(f"Geometry/{mtl_name}", "\n".join(mtl_lines))
-                    elif isinstance(export_data, dict):
-                        # This block ensures Rhino finds the textures in the Geometry folder
+                    export_data = scene.export(file_type='obj')
+ 
+                    # Write OBJ with corrected mtllib reference
+                    if isinstance(export_data, dict):
                         for fn, d in export_data.items():
                             if fn.endswith('.obj'):
                                 text = d if isinstance(d, str) else d.decode('utf-8', errors='replace')
                                 for old_fn in export_data.keys():
                                     if old_fn.endswith('.mtl'):
                                         text = text.replace(f"mtllib {old_fn}", f"mtllib {mtl_name}")
-                                zf.writestr(f"Geometry/{obj_name}", text.encode('utf-8'))
-                            elif fn.endswith('.mtl'):
-                                zf.writestr(f"Geometry/{mtl_name}", d.encode('utf-8') if isinstance(d, str) else d)
-                            else:
-                                # This drops the Albedo files directly next to the OBJ for Rhino
-                                zf.writestr(f"Geometry/{fn}", d if isinstance(d, bytes) else d.encode('utf-8'))
-                    elif isinstance(export_data, bytes):
-                        zf.writestr(f"Geometry/{obj_name}", export_data)
-                
-                # --- UNIVERSAL MAPS & ENCSAPE READY FOLDERS ---
-                for f, img in displacements.items():
-                    m_name = f"MassingPro_{project_id}_{f}"
-                    a_f, d_f, n_f = f"{m_name}_Albedo.jpg", f"{m_name}_Displacement.png", f"{m_name}_Normal.png"
-                    ab, db, nb = io.BytesIO(), io.BytesIO(), io.BytesIO()
-                    st.session_state.warped[f].save(ab, format='JPEG', quality=95, subsampling=0); img.save(db, format='PNG'); normals[f].save(nb, format='PNG')
-                    
-                    zf.writestr(f"Maps/{a_f}", ab.getvalue()); zf.writestr(f"Geometry/{a_f}", ab.getvalue()); zf.writestr(f"Maps/{d_f}", db.getvalue()); zf.writestr(f"Maps/{n_f}", nb.getvalue())
-                    
+                                zf.writestr(obj_name, text.encode('utf-8'))
+                    elif isinstance(export_data, (str, bytes)):
+                        text = export_data if isinstance(export_data, str) else export_data.decode('utf-8', errors='replace')
+                        text = text.replace("mtllib material.mtl", f"mtllib {mtl_name}")
+                        zf.writestr(obj_name, text.encode('utf-8'))
+ 
+                    # Write MTL with map_Kd lines pointing to flat filenames
+                    mtl_lines = []
+                    for mesh in meshes:
+                        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
+                            mat = mesh.visual.material
+                            mat_name = getattr(mat, 'name', None)
+                            if mat_name:
+                                entry = [
+                                    f"newmtl {mat_name}",
+                                    "Ka 1.0 1.0 1.0",
+                                    "Kd 1.0 1.0 1.0",
+                                    "Ks 0.0 0.0 0.0",
+                                    "d 1.0",
+                                    "illum 2"
+                                ]
+                                if not mat_name.endswith('_Blank'):
+                                    entry.append(f"map_Kd {mat_name}_Albedo.jpg")
+                                entry.append("")
+                                mtl_lines += entry
+                    if mtl_lines:
+                        zf.writestr(mtl_name, "\n".join(mtl_lines))
+ 
+                    # Write albedo images flat alongside OBJ/MTL
+                    for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes) in img_buffers.items():
+                        zf.writestr(a_f, ab_bytes)
+ 
+                # --- MAPS + MATPKG (flat in ZIP root) ---
+                for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes) in img_buffers.items():
+                    zf.writestr(d_f, db_bytes)
+                    zf.writestr(n_f, nb_bytes)
+ 
                     mp_buf = io.BytesIO()
                     with zipfile.ZipFile(mp_buf, "w", zipfile.ZIP_STORED) as mpz:
-                        mpz.writestr(a_f, ab.getvalue()); mpz.writestr(d_f, db.getvalue()); mpz.writestr(n_f, nb.getvalue())
-                        
-                        # --- THE ENSCAPE JSON FIX (ImageFade added) ---
+                        mpz.writestr(a_f, ab_bytes)
+                        mpz.writestr(d_f, db_bytes)
+                        mpz.writestr(n_f, nb_bytes)
                         ens_json = {
                             "Version": 1, "Name": m_name, "Type": 0, "DoubleSided": False,
                             "DiffuseColor": [1.0, 1.0, 1.0],
-			    "UseColorChannel": True,
+                            "UseColorChannel": True,
                             "DiffuseTexture": {"File": a_f, "Transformation": None, "IsInverted": False, "Brightness": 1.0},
                             "ImageFade": 1.0,
                             "Opacity": 1.0,
@@ -306,6 +322,6 @@ for mesh in meshes:
                             "Metallic": 0.0, "Specular": 0.5, "Refraction": 1.5
                         }
                         mpz.writestr("material.json", json.dumps(ens_json, indent=2))
-                    zf.writestr(f"Enscape_Ready/{m_name}.matpkg", mp_buf.getvalue())
-            
+                    zf.writestr(f"{m_name}.matpkg", mp_buf.getvalue())
+ 
             st.download_button("📦 DOWNLOAD PACKAGE", buf.getvalue(), f"MassingPro_{project_id}.zip", "application/zip")
