@@ -273,7 +273,7 @@ if st.session_state.warped["Front"]:
                     m_name = f"MassingPro_{project_id}_{f}"
                     a_f, d_f, n_f = f"{m_name}_Albedo.jpg", f"{m_name}_Displacement.png", f"{m_name}_Normal.png"
                     ab, db, nb = io.BytesIO(), io.BytesIO(), io.BytesIO()
-                    st.session_state.warped[f].save(ab, format='JPEG'); img.save(db, format='PNG'); normals[f].save(nb, format='PNG')
+                    st.session_state.warped[f].save(ab, format='JPEG', quality=95, subsampling=0); img.save(db, format='PNG'); normals[f].save(nb, format='PNG')
                     
                     zf.writestr(f"Maps/{a_f}", ab.getvalue()); zf.writestr(f"Maps/{d_f}", db.getvalue()); zf.writestr(f"Maps/{n_f}", nb.getvalue())
                     
