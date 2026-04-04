@@ -230,17 +230,21 @@ if st.session_state.warped["Front"]:
             scene = trimesh.Scene(meshes)
  
             # --- PRE-RENDER IMAGE BUFFERS (shared by OBJ albedos, and matpkg) ---
-            img_buffers = {}  # face -> (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes)
+            img_buffers = {}  # face -> (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes, kd_str)
             for f, disp_img in displacements.items():
                 m_name = f"MassingPro_{project_id}_{f}"
                 a_f = f"{m_name}_Albedo.jpg"
                 d_f = f"{m_name}_Displacement.png"
                 n_f = f"{m_name}_Normal.png"
                 ab, db, nb = io.BytesIO(), io.BytesIO(), io.BytesIO()
-                st.session_state.warped[f].save(ab, format='JPEG', quality=95, subsampling=0)
+                warped_img = st.session_state.warped[f]
+                warped_img.save(ab, format='JPEG', quality=95, subsampling=0)
                 disp_img.save(db, format='PNG')
                 normals[f].save(nb, format='PNG')
-                img_buffers[f] = (m_name, a_f, d_f, n_f, ab.getvalue(), db.getvalue(), nb.getvalue())
+                # Average colour → Kd fallback so Rhino viewport isn't white
+                avg = np.array(warped_img).mean(axis=(0, 1)) / 255.0
+                kd_str = f"{avg[0]:.3f} {avg[1]:.3f} {avg[2]:.3f}"
+                img_buffers[f] = (m_name, a_f, d_f, n_f, ab.getvalue(), db.getvalue(), nb.getvalue(), kd_str)
  
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -267,34 +271,42 @@ if st.session_state.warped["Front"]:
                         text = text.replace("mtllib material.mtl", f"mtllib {mtl_name}")
                         zf.writestr(obj_name, text.encode('utf-8'))
  
-                    # Write MTL with map_Kd lines pointing to flat filenames
+                    # Write MTL with map_Kd + map_bump so Enscape reads textures directly
+                    # from the Rhino material channels — no matpkg import step required.
+                    # Kd is the average albedo colour (fallback for viewports without texture).
+                    face_kd = {data[0]: data[7] for data in img_buffers.values()}  # m_name -> kd_str
+                    face_maps = {data[0]: (data[1], data[3]) for data in img_buffers.values()}  # m_name -> (a_f, n_f)
                     mtl_lines = []
                     for mesh in meshes:
                         if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
                             mat = mesh.visual.material
                             mat_name = getattr(mat, 'name', None)
                             if mat_name:
+                                kd = face_kd.get(mat_name, "0.9 0.9 0.9")
                                 entry = [
                                     f"newmtl {mat_name}",
                                     "Ka 1.0 1.0 1.0",
-                                    "Kd 1.0 1.0 1.0",
+                                    f"Kd {kd}",
                                     "Ks 0.0 0.0 0.0",
                                     "d 1.0",
-                                    "illum 2"
+                                    "illum 2",
                                 ]
-                                if not mat_name.endswith('_Blank'):
-                                    entry.append(f"map_Kd {mat_name}_Albedo.jpg")
+                                if mat_name in face_maps:
+                                    a_f, n_f = face_maps[mat_name]
+                                    entry.append(f"map_Kd {a_f}")
+                                    entry.append(f"map_bump -bm 1.0 {n_f}")
                                 entry.append("")
                                 mtl_lines += entry
                     if mtl_lines:
                         zf.writestr(mtl_name, "\n".join(mtl_lines))
  
-                    # Write albedo images flat alongside OBJ/MTL
-                    for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes) in img_buffers.items():
+                    # Write albedo + normal flat alongside OBJ so Rhino resolves the paths
+                    for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes, _kd) in img_buffers.items():
                         zf.writestr(a_f, ab_bytes)
+                        zf.writestr(n_f, nb_bytes)
  
                 # --- MAPS + MATPKG (flat in ZIP root) ---
-                for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes) in img_buffers.items():
+                for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes, _kd) in img_buffers.items():
                     zf.writestr(d_f, db_bytes)
                     zf.writestr(n_f, nb_bytes)
  
@@ -325,3 +337,4 @@ if st.session_state.warped["Front"]:
                     zf.writestr(f"{m_name}.matpkg", mp_buf.getvalue())
  
             st.download_button("📦 DOWNLOAD PACKAGE", buf.getvalue(), f"MassingPro_{project_id}.zip", "application/zip")
+ 
