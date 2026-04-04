@@ -12,7 +12,8 @@ import zipfile
 import random
 import base64
 import json
- 
+import requests
+
 # --- DYNAMIC CUSTOM COMPONENTS (ZERO-LAG UI) ---
 PTS_DIR = "pts_frontend"
 os.makedirs(PTS_DIR, exist_ok=True)
@@ -22,7 +23,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
     <html>
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
-          <p style="margin-bottom:8px;">📍 Click 4 corners (TL &rarr; TR &rarr; BR &rarr; BL).</p>
+          <p style="margin-bottom:8px;">📍 Click 4 corners (TL &rarr; TR &rarr; BR &rarr; BL). Drag to adjust.</p>
           <canvas id="mycanvas" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear</button>
           <button id="btnSend" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Extract Perspective</button>
@@ -30,7 +31,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
       <script>
         function send(type, data) { window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*"); }
         send("streamlit:componentReady", {apiVersion: 1});
-        let initialized = false; let points = [];
+        let initialized = false; let points = []; let dragging = -1;
         window.addEventListener("message", function(event) {
             if (event.data.type === "streamlit:render" && !initialized) {
                 initialized = true; const args = event.data.args;
@@ -39,18 +40,50 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
                 send("streamlit:setFrameHeight", {height: args.canvas_h + 100});
                 const ctx = canvas.getContext('2d'); const img = new Image();
                 img.src = 'data:image/png;base64,' + args.img_b64;
-                img.onload = () => ctx.drawImage(img, 0, 0);
+                img.onload = () => {
+                    ctx.drawImage(img, 0, 0);
+                    if (args.initial_pts && args.initial_pts.length === 4 && points.length === 0) {
+                        const scaleX = args.raw_w / args.canvas_w;
+                        const scaleY = args.raw_h / args.canvas_h;
+                        points = args.initial_pts.map(p => ({x: p.x / scaleX, y: p.y / scaleY}));
+                        drawState();
+                    }
+                };
                 function drawState() {
                     ctx.drawImage(img, 0, 0); ctx.fillStyle = '#ff4b4b'; ctx.strokeStyle = '#ff4b4b'; ctx.lineWidth = 3;
-                    for (let i=0; i<points.length; i++) { ctx.beginPath(); ctx.arc(points[i].x, points[i].y, 6, 0, Math.PI*2); ctx.fill(); ctx.stroke(); }
+                    for (let i=0; i<points.length; i++) {
+                        ctx.beginPath(); ctx.arc(points[i].x, points[i].y, 7, 0, Math.PI*2);
+                        ctx.fillStyle = dragging === i ? '#ffaa00' : '#ff4b4b'; ctx.fill(); ctx.stroke();
+                    }
                     if (points.length > 1) {
+                        ctx.strokeStyle = '#ff4b4b'; ctx.lineWidth = 2;
                         ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
                         for (let i=1; i<points.length; i++) ctx.lineTo(points[i].x, points[i].y);
                         if (points.length === 4) ctx.lineTo(points[0].x, points[0].y);
                         ctx.stroke();
                     }
                 }
-                canvas.addEventListener('mousedown', e => { if (points.length >= 4) return; const r = canvas.getBoundingClientRect(); points.push({x: e.clientX - r.left, y: e.clientY - r.top}); drawState(); });
+                function hitTest(x, y) {
+                    for (let i=0; i<points.length; i++) {
+                        const dx = points[i].x - x, dy = points[i].y - y;
+                        if (Math.sqrt(dx*dx + dy*dy) < 12) return i;
+                    }
+                    return -1;
+                }
+                canvas.addEventListener('mousedown', e => {
+                    const r = canvas.getBoundingClientRect(); const x = e.clientX - r.left; const y = e.clientY - r.top;
+                    const hit = hitTest(x, y);
+                    if (hit >= 0) { dragging = hit; }
+                    else if (points.length < 4) { points.push({x, y}); drawState(); }
+                });
+                canvas.addEventListener('mousemove', e => {
+                    if (dragging < 0) return;
+                    const r = canvas.getBoundingClientRect();
+                    points[dragging] = {x: e.clientX - r.left, y: e.clientY - r.top};
+                    drawState();
+                });
+                canvas.addEventListener('mouseup', () => { dragging = -1; });
+                canvas.addEventListener('mouseleave', () => { dragging = -1; });
                 document.getElementById('btnClear').onclick = () => { points = []; drawState(); };
                 document.getElementById('btnSend').onclick = () => {
                     if (points.length !== 4) return alert('Please select exactly 4 points.');
@@ -65,7 +98,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
     </html>
     """)
 st_pts_picker = components.declare_component("pts_picker", path=PTS_DIR)
- 
+
 MASK_DIR = "mask_frontend"
 os.makedirs(MASK_DIR, exist_ok=True)
 with open(f"{MASK_DIR}/index.html", "w") as f:
@@ -117,11 +150,11 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
     </html>
     """)
 st_mask_drawer = components.declare_component("mask_drawer", path=MASK_DIR)
- 
+
 # --- CORE UTILITIES ---
 def pil_to_b64(img: Image.Image) -> str:
     buf = io.BytesIO(); img.save(buf, format="PNG"); return base64.b64encode(buf.getvalue()).decode()
- 
+
 def unwarp_facade(image_pil, src_points, physical_width, physical_height, output_res=1024):
     image_cv = np.array(image_pil); aspect_ratio = physical_width / float(physical_height)
     out_w, out_h = (output_res, int(output_res / aspect_ratio)) if aspect_ratio > 1.0 else (int(output_res * aspect_ratio), output_res)
@@ -129,7 +162,7 @@ def unwarp_facade(image_pil, src_points, physical_width, physical_height, output
     dst_pts = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype="float32")
     matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
     return Image.fromarray(cv2.warpPerspective(image_cv, matrix, (out_w, out_h), flags=cv2.INTER_CUBIC))
- 
+
 def process_depth_and_normals(image_pil, mask_b64, session, normal_strength):
     image_cv = np.array(image_pil); orig_h, orig_w = image_cv.shape[:2]
     img_resized = cv2.resize(image_cv, (518, 518), interpolation=cv2.INTER_CUBIC)
@@ -149,47 +182,213 @@ def process_depth_and_normals(image_pil, mask_b64, session, normal_strength):
     mag = np.sqrt((sobel_x * normal_strength)**2 + (sobel_y * normal_strength)**2 + 1.0)
     normal_map = np.stack([((-(sobel_x * normal_strength) / mag + 1.0) * 127.5), (((-(sobel_y * normal_strength) / mag) + 1.0) * 127.5), ((1.0 / mag) * 255)], axis=2).astype(np.uint8)
     return Image.fromarray((depth_filtered * 65535.0).astype(np.uint16), mode='I;16'), Image.fromarray(normal_map, mode='RGB')
- 
+
 def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, face_name, project_id):
     mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
     if face_name == "Bot": mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2); return mesh
     mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.9) if diffuse_img else material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
     mesh.visual = texture.TextureVisuals(uv=uvs, material=mat); return mesh
- 
+
+# --- AUTO PERSPECTIVE DETECTION ---
+def order_quad_points(pts):
+    """Order 4 points as TL, TR, BR, BL."""
+    s = pts.sum(axis=1); d = np.diff(pts, axis=1).flatten()
+    return np.array([pts[s.argmin()], pts[d.argmin()], pts[s.argmax()], pts[d.argmax()]])
+
+def detect_facade_corners(image_pil):
+    """Detect the 4 facade corners using edge + contour analysis.
+    Returns list of {x, y} in raw image coordinates, ordered TL→TR→BR→BL.
+    Falls back to a centred 85% crop if no clear quad is found."""
+    img_cv = np.array(image_pil.convert("RGB"))
+    h, w = img_cv.shape[:2]
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 30, 100)
+    kernel = np.ones((3, 3), np.uint8)
+    dilated = cv2.dilate(edges, kernel, iterations=2)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best_quad, best_area = None, 0
+    min_area = w * h * 0.08
+    for cnt in sorted(contours, key=cv2.contourArea, reverse=True)[:15]:
+        peri = cv2.arcLength(cnt, True)
+        for eps in [0.02, 0.04, 0.06, 0.10]:
+            approx = cv2.approxPolyDP(cnt, eps * peri, True)
+            if len(approx) == 4:
+                area = cv2.contourArea(approx)
+                if area > best_area and area > min_area:
+                    best_area = area
+                    best_quad = approx.reshape(4, 2).astype(float)
+                break
+    if best_quad is not None:
+        pts = order_quad_points(best_quad)
+    else:
+        mx, my = w * 0.075, h * 0.075
+        pts = np.array([[mx, my], [w - mx, my], [w - mx, h - my], [mx, h - my]])
+    return [{"x": float(p[0]), "y": float(p[1])} for p in pts]
+
+# --- STREET VIEW FETCH ---
+def fetch_street_view(address, api_key, heading=0, pitch=5, fov=90):
+    """Fetch a Street View image for the given address and camera heading.
+    Returns a PIL Image or (None, error_string)."""
+    url = (
+        f"https://maps.googleapis.com/maps/api/streetview"
+        f"?size=1024x768&location={requests.utils.quote(address)}"
+        f"&fov={fov}&heading={heading}&pitch={pitch}&key={api_key}"
+    )
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image"):
+            return Image.open(io.BytesIO(resp.content)).convert("RGB"), None
+        return None, f"Street View returned status {resp.status_code} — check address or API key."
+    except Exception as e:
+        return None, str(e)
+
+# --- RHINO SCRIPT GENERATOR ---
+def generate_rhino_script(project_id):
+    """Generate a Rhino Python script that auto-sets material textures.
+    Place the .py alongside the OBJ and textures, then run via
+    Rhino > Tools > Python Script > Run."""
+    return f'''"""
+MassingPro Auto-Material Script
+Project ID : {project_id}
+Instructions: Place this file in the same folder as the exported OBJ and
+              texture images. Open the OBJ in Rhino, then run this script
+              via Tools > Python Script > Run.
+"""
+import os
+import scriptcontext as sc
+import Rhino
+
+def run():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    doc = sc.doc
+    applied = 0
+
+    for mat in doc.Materials:
+        if not mat.Name.startswith("MassingPro_{project_id}_"):
+            continue
+
+        albedo = os.path.join(script_dir, mat.Name + "_Albedo.jpg")
+        normal = os.path.join(script_dir, mat.Name + "_Normal.png")
+
+        if os.path.exists(albedo):
+            tex = Rhino.DocObjects.Texture()
+            tex.FileName = albedo
+            mat.SetBitmapTexture(tex)
+
+        if os.path.exists(normal):
+            tex = Rhino.DocObjects.Texture()
+            tex.FileName = normal
+            mat.SetBumpTexture(tex)
+            mat.BumpStrength = 1.0
+
+        mat.CommitChanges()
+        applied += 1
+
+    doc.Views.Redraw()
+    print(f"MassingPro: Applied textures to {{applied}} material(s).")
+
+run()
+'''
+
 # --- UI APP ---
 st.set_page_config(page_title="MassingPro", layout="wide")
 st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
-for k in ['masks', 'warped']:
+for k in ['masks', 'warped', 'raw', 'auto_pts']:
     if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
- 
+
 with st.sidebar:
     st.header("Project Dimensions")
     dim_x, dim_y, dim_z = st.number_input("Width (X) m", 1.0, 55.0, value=10.0), st.number_input("Depth (Y) m", 1.0, 55.0, value=15.0), st.number_input("Height (Z) m", 1.0, 68.0, value=12.0)
     blank_color, n_strength = st.color_picker("Empty Face Color", "#2A2D35"), st.slider("Normal Intensity", 0.1, 5.0, 2.0)
- 
+    st.divider()
+    with st.expander("🗺️ Street View API"):
+        st.caption("Paste your Google Maps API key to enable Street View fetch. Keep Billing > Street View Static API enabled.")
+        sv_key_default = st.secrets.get("GOOGLE_MAPS_API_KEY", "") if hasattr(st, "secrets") else ""
+        sv_api_key = st.text_input("API Key", value=sv_key_default, type="password", key="sv_api_key_input")
+
 tabs = st.tabs([f" {f} Facade" for f in faces])
 face_dims = {"Front": (dim_x, dim_z), "Back": (dim_x, dim_z), "Left": (dim_y, dim_z), "Right": (dim_y, dim_z)}
 uv_coords = np.array([[0, 1], [1, 1], [1, 0], [0, 0]])
- 
+
 for i, face in enumerate(faces):
     with tabs[i]:
-        up_file = st.file_uploader(f"Upload {face}", type=["jpg", "png"], key=f"up_{face}")
-        if up_file:
-            raw = Image.open(up_file).convert("RGB")
+
+        # --- IMAGE SOURCE ---
+        source = st.radio("Source", ["📁 Upload", "🗺️ Street View"], key=f"src_{face}", horizontal=True)
+        raw = None
+
+        if source == "📁 Upload":
+            up_file = st.file_uploader(f"Upload {face}", type=["jpg", "png"], key=f"up_{face}")
+            if up_file:
+                raw = Image.open(up_file).convert("RGB")
+                st.session_state.raw[face] = raw
+        else:
+            sv_addr = st.text_input("Address or place name", key=f"sv_addr_{face}", placeholder="e.g. Empire State Building, New York")
+            sv_heading = st.slider("Camera heading (°)", 0, 359, 0, key=f"sv_h_{face}",
+                                   help="0=North  90=East  180=South  270=West")
+            sv_pitch = st.slider("Pitch (°)", -20, 20, 5, key=f"sv_p_{face}",
+                                 help="Tilt up (+) or down (−)")
+            if st.button("Fetch Street View", key=f"sv_fetch_{face}"):
+                if not sv_api_key:
+                    st.error("Add your Google Maps API key in the sidebar.")
+                elif not sv_addr:
+                    st.error("Enter an address.")
+                else:
+                    with st.spinner("Fetching…"):
+                        img_sv, err = fetch_street_view(sv_addr, sv_api_key, sv_heading, sv_pitch)
+                    if img_sv:
+                        st.session_state.raw[face] = img_sv
+                        st.session_state.warped[face] = None
+                        st.session_state.auto_pts[face] = None
+                        st.rerun()
+                    else:
+                        st.error(err)
+            if st.session_state.raw[face] is not None:
+                raw = st.session_state.raw[face]
+
+        # --- PERSPECTIVE PICKER ---
+        if raw is not None:
             if st.session_state.warped[face] is None:
-                cw, ch = min(800, raw.width), int(raw.height * (min(800, raw.width) / raw.width))
-                pts_data = st_pts_picker(img_b64=pil_to_b64(raw.resize((cw, ch))), canvas_w=cw, canvas_h=ch, raw_w=raw.width, raw_h=raw.height, key=f"pts_{face}")
-                if pts_data: st.session_state.warped[face] = unwarp_facade(raw, pts_data, *face_dims[face]); st.rerun()
+                cw = min(800, raw.width)
+                ch = int(raw.height * (cw / raw.width))
+
+                # Auto-detect button
+                col_a, col_b = st.columns([1, 5])
+                with col_a:
+                    if st.button("🎯 Auto-Detect", key=f"auto_{face}"):
+                        st.session_state.auto_pts[face] = detect_facade_corners(raw)
+                with col_b:
+                    st.caption("Optional — or click the 4 corners manually on the canvas below.")
+                    if st.session_state.auto_pts[face]:
+                        st.caption("✅ Auto-detected. Drag any point to refine, or Clear and click manually.")
+
+                pts_data = st_pts_picker(
+                    img_b64=pil_to_b64(raw.resize((cw, ch))),
+                    canvas_w=cw, canvas_h=ch,
+                    raw_w=raw.width, raw_h=raw.height,
+                    initial_pts=st.session_state.auto_pts[face],
+                    key=f"pts_{face}"
+                )
+                if pts_data:
+                    st.session_state.warped[face] = unwarp_facade(raw, pts_data, *face_dims[face])
+                    st.session_state.auto_pts[face] = None
+                    st.rerun()
             else:
                 st.image(st.session_state.warped[face], use_container_width=True)
-                if st.button("Reset Perspective", key=f"re_{face}"): st.session_state.warped[face] = None; st.rerun()
-                cw, ch = min(800, st.session_state.warped[face].width), int(st.session_state.warped[face].height * (min(800, st.session_state.warped[face].width) / st.session_state.warped[face].width))
+                if st.button("Reset Perspective", key=f"re_{face}"):
+                    st.session_state.warped[face] = None
+                    st.session_state.raw[face] = None
+                    st.session_state.auto_pts[face] = None
+                    st.rerun()
+                cw = min(800, st.session_state.warped[face].width)
+                ch = int(st.session_state.warped[face].height * (cw / st.session_state.warped[face].width))
                 mask_data = st_mask_drawer(img_b64=pil_to_b64(st.session_state.warped[face].resize((cw, ch))), canvas_w=cw, canvas_h=ch, key=f"mask_{face}")
                 if mask_data: st.session_state.masks[face] = mask_data; st.success("✅ Mask Saved!")
- 
+
 st.divider()
- 
+
 # --- USER FORMAT SELECTION ---
 if st.session_state.warped["Front"]:
     st.markdown("### 📦 Export Options")
@@ -201,12 +400,12 @@ if st.session_state.warped["Front"]:
         ],
         horizontal=False
     )
- 
+
     if st.button("BUILD MASSING PRO ASSET", type="primary", use_container_width=True):
         with st.spinner("Compiling Package..."):
             session, project_id = ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider']), str(random.randint(1000, 999999))
             blank_rgba, meshes, displacements, normals = [int(blank_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)] + [255], [], {}, {}
- 
+
             plane_verts = {
                 "Front": np.array([[0, dim_z, 0], [dim_x, dim_z, 0], [dim_x, 0, 0], [0, 0, 0]]),
                 "Back":  np.array([[dim_x, dim_z, -dim_y], [0, dim_z, -dim_y], [0, 0, -dim_y], [dim_x, 0, -dim_y]]),
@@ -226,38 +425,34 @@ if st.session_state.warped["Front"]:
                 create_textured_plane(plane_verts["Top"], uv_coords, None, None, blank_rgba, "Top", project_id),
                 create_textured_plane(plane_verts["Bot"], uv_coords, None, None, blank_rgba, "Bot", project_id)
             ])
- 
+
             scene = trimesh.Scene(meshes)
- 
-            # --- PRE-RENDER IMAGE BUFFERS (shared by OBJ albedos, and matpkg) ---
-            img_buffers = {}  # face -> (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes, kd_str)
+
+            # --- PRE-RENDER IMAGE BUFFERS ---
+            img_buffers = {}
             for f, disp_img in displacements.items():
                 m_name = f"MassingPro_{project_id}_{f}"
                 a_f = f"{m_name}_Albedo.jpg"
                 d_f = f"{m_name}_Displacement.png"
                 n_f = f"{m_name}_Normal.png"
                 ab, db, nb = io.BytesIO(), io.BytesIO(), io.BytesIO()
-                warped_img = st.session_state.warped[f]
-                warped_img.save(ab, format='JPEG', quality=95, subsampling=0)
+                st.session_state.warped[f].save(ab, format='JPEG', quality=95, subsampling=0)
                 disp_img.save(db, format='PNG')
                 normals[f].save(nb, format='PNG')
-                # Average colour → Kd fallback so Rhino viewport isn't white
-                avg = np.array(warped_img).mean(axis=(0, 1)) / 255.0
-                kd_str = f"{avg[0]:.3f} {avg[1]:.3f} {avg[2]:.3f}"
-                img_buffers[f] = (m_name, a_f, d_f, n_f, ab.getvalue(), db.getvalue(), nb.getvalue(), kd_str)
- 
+                img_buffers[f] = (m_name, a_f, d_f, n_f, ab.getvalue(), db.getvalue(), nb.getvalue())
+
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
- 
-                # --- GEOMETRY EXPORT (all files flat in ZIP root) ---
+
+                # --- GEOMETRY EXPORT (flat in ZIP root) ---
                 if "glb" in export_format.lower():
                     zf.writestr(f"MassingPro_{project_id}.glb", scene.export(file_type='glb'))
                 else:
                     obj_name = f"MassingPro_{project_id}.obj"
                     mtl_name = f"MassingPro_{project_id}.mtl"
                     export_data = scene.export(file_type='obj')
- 
-                    # Write OBJ with corrected mtllib reference
+
+                    # Write OBJ
                     if isinstance(export_data, dict):
                         for fn, d in export_data.items():
                             if fn.endswith('.obj'):
@@ -270,46 +465,36 @@ if st.session_state.warped["Front"]:
                         text = export_data if isinstance(export_data, str) else export_data.decode('utf-8', errors='replace')
                         text = text.replace("mtllib material.mtl", f"mtllib {mtl_name}")
                         zf.writestr(obj_name, text.encode('utf-8'))
- 
-                    # Write MTL with map_Kd + map_bump so Enscape reads textures directly
-                    # from the Rhino material channels — no matpkg import step required.
-                    # Kd is the average albedo colour (fallback for viewports without texture).
-                    face_kd = {data[0]: data[7] for data in img_buffers.values()}  # m_name -> kd_str
-                    face_maps = {data[0]: (data[1], data[3]) for data in img_buffers.values()}  # m_name -> (a_f, n_f)
+
+                    # Write MTL with map_Kd + map_bump (Enscape reads both natively)
+                    face_maps = {data[0]: (data[1], data[3]) for data in img_buffers.values()}
                     mtl_lines = []
                     for mesh in meshes:
                         if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
                             mat = mesh.visual.material
                             mat_name = getattr(mat, 'name', None)
                             if mat_name:
-                                kd = face_kd.get(mat_name, "0.9 0.9 0.9")
-                                entry = [
-                                    f"newmtl {mat_name}",
-                                    "Ka 1.0 1.0 1.0",
-                                    f"Kd {kd}",
-                                    "Ks 0.0 0.0 0.0",
-                                    "d 1.0",
-                                    "illum 2",
-                                ]
+                                entry = ["Ka 1.0 1.0 1.0", "Kd 0.9 0.9 0.9", "Ks 0.0 0.0 0.0", "d 1.0", "illum 2"]
                                 if mat_name in face_maps:
                                     a_f, n_f = face_maps[mat_name]
                                     entry.append(f"map_Kd {a_f}")
                                     entry.append(f"map_bump -bm 1.0 {n_f}")
-                                entry.append("")
-                                mtl_lines += entry
+                                mtl_lines += [f"newmtl {mat_name}"] + entry + [""]
                     if mtl_lines:
                         zf.writestr(mtl_name, "\n".join(mtl_lines))
- 
-                    # Write albedo + normal flat alongside OBJ so Rhino resolves the paths
-                    for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes, _kd) in img_buffers.items():
+
+                    # Albedo + Normal flat alongside OBJ
+                    for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes) in img_buffers.items():
                         zf.writestr(a_f, ab_bytes)
                         zf.writestr(n_f, nb_bytes)
- 
-                # --- MAPS + MATPKG (flat in ZIP root) ---
-                for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes, _kd) in img_buffers.items():
+
+                    # Rhino auto-material script
+                    zf.writestr(f"MassingPro_{project_id}_ApplyMaterials.py", generate_rhino_script(project_id))
+
+                # --- DISPLACEMENT MAPS + MATPKG (flat in ZIP root) ---
+                for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes) in img_buffers.items():
                     zf.writestr(d_f, db_bytes)
-                    zf.writestr(n_f, nb_bytes)
- 
+
                     mp_buf = io.BytesIO()
                     with zipfile.ZipFile(mp_buf, "w", zipfile.ZIP_STORED) as mpz:
                         mpz.writestr(a_f, ab_bytes)
@@ -320,21 +505,15 @@ if st.session_state.warped["Front"]:
                             "DiffuseColor": [1.0, 1.0, 1.0],
                             "UseColorChannel": True,
                             "DiffuseTexture": {"File": a_f, "Transformation": None, "IsInverted": False, "Brightness": 1.0},
-                            "ImageFade": 1.0,
-                            "Opacity": 1.0,
-                            "MaskTexture": None,
-                            "TintColor": [1.0, 1.0, 1.0],
-                            "IsSolidGlass": False,
-                            "EmissiveColor": [1.0, 1.0, 1.0],
-                            "EmissiveStrength": 0.0,
+                            "ImageFade": 1.0, "Opacity": 1.0, "MaskTexture": None,
+                            "TintColor": [1.0, 1.0, 1.0], "IsSolidGlass": False,
+                            "EmissiveColor": [1.0, 1.0, 1.0], "EmissiveStrength": 0.0,
                             "BumpTexture": {"File": n_f, "Transformation": None, "IsInverted": False, "Brightness": 1.0},
-                            "BumpAmount": 1.0, "BumpMapType": 3,
-                            "Roughness": 0.9,
+                            "BumpAmount": 1.0, "BumpMapType": 3, "Roughness": 0.9,
                             "RoughnessTexture": {"File": d_f, "Transformation": None, "IsInverted": False, "Brightness": 1.0},
                             "Metallic": 0.0, "Specular": 0.5, "Refraction": 1.5
                         }
                         mpz.writestr("material.json", json.dumps(ens_json, indent=2))
                     zf.writestr(f"{m_name}.matpkg", mp_buf.getvalue())
- 
+
             st.download_button("📦 DOWNLOAD PACKAGE", buf.getvalue(), f"MassingPro_{project_id}.zip", "application/zip")
- 

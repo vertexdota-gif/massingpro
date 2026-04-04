@@ -40,21 +40,9 @@ Best for rapid viewport iteration in Rhino or SketchUp. Self-contained with embe
 
 ---
 
-## Street View integration
-
-Add your Google Maps API key to `.streamlit/secrets.toml`:
-
-```toml
-GOOGLE_MAPS_API_KEY = "your_key_here"
-```
-
-Or paste it directly into the sidebar at runtime. Requires **Street View Static API** enabled in your Google Cloud project.
-
----
-
 ## Auto perspective detection
 
-Click **🎯 Auto-Detect** after uploading a photo to auto-fill the four corner points using edge and contour analysis. Drag any point to refine before extracting.
+After uploading a photo, click **🎯 Auto-Detect** to auto-fill the four corner points using edge and contour analysis — this is an optional shortcut. You can always ignore it and click the four corners manually on the canvas. If auto-detection lands incorrectly, drag the points to correct them or clear and re-click from scratch.
 
 ---
 
