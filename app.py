@@ -31,24 +31,19 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
         function send(type, data) { window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*"); }
         send("streamlit:componentReady", {apiVersion: 1});
         let initialized = false; let points = []; let dragging = -1;
+        let scaleX = 1; let scaleY = 1; let drawState = null;
         window.addEventListener("message", function(event) {
-            if (event.data.type === "streamlit:render" && !initialized) {
-                initialized = true; const args = event.data.args;
+            if (event.data.type !== "streamlit:render") return;
+            const args = event.data.args;
+            if (!initialized) {
+                initialized = true;
                 const canvas = document.getElementById('mycanvas');
                 canvas.width = args.canvas_w; canvas.height = args.canvas_h;
                 send("streamlit:setFrameHeight", {height: args.canvas_h + 100});
                 const ctx = canvas.getContext('2d'); const img = new Image();
+                scaleX = args.raw_w / args.canvas_w; scaleY = args.raw_h / args.canvas_h;
                 img.src = 'data:image/png;base64,' + args.img_b64;
-                img.onload = () => {
-                    ctx.drawImage(img, 0, 0);
-                    if (args.initial_pts && args.initial_pts.length === 4 && points.length === 0) {
-                        const scaleX = args.raw_w / args.canvas_w;
-                        const scaleY = args.raw_h / args.canvas_h;
-                        points = args.initial_pts.map(p => ({x: p.x / scaleX, y: p.y / scaleY}));
-                        drawState();
-                    }
-                };
-                function drawState() {
+                drawState = function() {
                     ctx.drawImage(img, 0, 0); ctx.lineWidth = 3;
                     for (let i=0; i<points.length; i++) {
                         ctx.beginPath(); ctx.arc(points[i].x, points[i].y, 7, 0, Math.PI*2);
@@ -62,7 +57,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
                         if (points.length === 4) ctx.lineTo(points[0].x, points[0].y);
                         ctx.stroke();
                     }
-                }
+                };
                 function hitTest(x, y) {
                     for (let i=0; i<points.length; i++) {
                         const dx = points[i].x - x, dy = points[i].y - y;
@@ -70,6 +65,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
                     }
                     return -1;
                 }
+                img.onload = () => { drawState(); };
                 canvas.addEventListener('mousedown', e => {
                     const r = canvas.getBoundingClientRect(); const x = e.clientX - r.left; const y = e.clientY - r.top;
                     const hit = hitTest(x, y);
@@ -87,10 +83,14 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
                 document.getElementById('btnClear').onclick = () => { points = []; drawState(); };
                 document.getElementById('btnSend').onclick = () => {
                     if (points.length !== 4) return alert('Please select exactly 4 points.');
-                    const scaleX = args.raw_w / args.canvas_w; const scaleY = args.raw_h / args.canvas_h;
                     const finalPts = points.map(p => ({x: p.x * scaleX, y: p.y * scaleY}));
                     send("streamlit:setComponentValue", {value: finalPts});
                 };
+            }
+            // Always apply incoming initial_pts (e.g. after Auto-Detect re-render)
+            if (args.initial_pts && args.initial_pts.length === 4 && points.length === 0) {
+                points = args.initial_pts.map(p => ({x: p.x / scaleX, y: p.y / scaleY}));
+                if (drawState) drawState();
             }
         });
       </script>
