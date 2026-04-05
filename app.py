@@ -252,15 +252,10 @@ def run():
         normal = os.path.join(script_dir, mat.Name + "_Normal.png")
 
         if os.path.exists(albedo):
-            tex = Rhino.DocObjects.Texture()
-            tex.FileName = albedo
-            mat.SetBitmapTexture(tex)
+            mat.SetBitmapTexture(albedo)
 
         if os.path.exists(normal):
-            tex = Rhino.DocObjects.Texture()
-            tex.FileName = normal
-            tex.BumpScale = 1.0
-            mat.SetBumpTexture(tex)
+            mat.SetBumpTexture(normal)
 
         mat.CommitChanges()
         applied += 1
