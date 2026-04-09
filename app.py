@@ -362,12 +362,17 @@ def generate_collada_dae(project_id, plane_verts, img_buffers, blank_rgba):
 '''
 
     # --- library_geometries ---
+    # Front and Back face cross products produce inward normals with the default
+    # winding order — reverse their triangles so normals point outward.
+    inward_faces = {"Front", "Back"}
     geometries_xml = ""
     for f in all_faces:
         verts = plane_verts[f]
         pos_vals = " ".join(f"{v:.6f}" for vert in verts for v in vert)
         # UVs: same as existing exports [[0,1],[1,1],[1,0],[0,0]]
         uv_vals = "0 1  1 1  1 0  0 0"
+        # Reversed winding [0,2,1],[0,3,2] for faces whose default order yields an inward normal
+        p_str = "0 0 2 2 1 1  0 0 3 3 2 2" if f in inward_faces else "0 0 1 1 2 2  0 0 2 2 3 3"
         geometries_xml += f'''    <geometry id="geo-{f}" name="{f}">
       <mesh>
         <source id="geo-{f}-pos">
@@ -392,7 +397,7 @@ def generate_collada_dae(project_id, plane_verts, img_buffers, blank_rgba):
         <triangles count="2" material="mat-{f}-symbol">
           <input semantic="VERTEX" source="#geo-{f}-verts" offset="0"/>
           <input semantic="TEXCOORD" source="#geo-{f}-uvs" offset="1" set="0"/>
-          <p>0 0 1 1 2 2 0 0 2 2 3 3</p>
+          <p>{p_str}</p>
         </triangles>
       </mesh>
     </geometry>
