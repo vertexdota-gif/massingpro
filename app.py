@@ -195,17 +195,26 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
     send("streamlit:componentReady", {apiVersion: 1});
 
     let currentGlb = null;
+    let expanded = false;
+
+    // Force doubleSided on all materials after model loads (belt-and-suspenders over GLB patch)
+    document.getElementById('mv').addEventListener('load', () => {
+      try {
+        document.getElementById('mv').model.materials.forEach(mat => mat.setDoubleSided(true));
+      } catch(e) {}
+    });
 
     document.getElementById('toolbar').addEventListener('click', () => {
-      const isExpanded = document.getElementById('toggleBtn').innerHTML.includes('2921');
-      send("streamlit:setComponentValue", {value: {expanded: !isExpanded}});
+      expanded = !expanded;
+      document.getElementById('toggleBtn').innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
+      send("streamlit:setComponentValue", {value: {expanded: expanded}, dataType: "json"});
     });
 
     window.addEventListener("message", function(e) {
       if (e.data.type !== "streamlit:render") return;
       const args = e.data.args;
       const h = args.panel_height || 370;
-      const expanded = h >= 650;
+      expanded = h >= 650;
       document.getElementById('toggleBtn').innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
       document.getElementById('mv').style.height = (h - 62) + 'px';
       if (args.glb_b64 !== currentGlb) {
