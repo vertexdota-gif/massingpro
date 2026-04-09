@@ -272,6 +272,9 @@ st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
 for k in ['masks', 'warped', 'auto_pts']:
     if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
+if 'preview_glb_b64' not in st.session_state: st.session_state['preview_glb_b64'] = None
+if 'pkg_zip' not in st.session_state: st.session_state['pkg_zip'] = None
+if 'pkg_name' not in st.session_state: st.session_state['pkg_name'] = None
 
 with st.sidebar:
     st.header("Project Dimensions")
@@ -317,6 +320,9 @@ for i, face in enumerate(faces):
                 if st.button("Reset Perspective", key=f"re_{face}"):
                     st.session_state.warped[face] = None
                     st.session_state.auto_pts[face] = None
+                    st.session_state['preview_glb_b64'] = None
+                    st.session_state['pkg_zip'] = None
+                    st.session_state['pkg_name'] = None
                     st.rerun()
                 cw = min(800, st.session_state.warped[face].width)
                 ch = int(st.session_state.warped[face].height * (cw / st.session_state.warped[face].width))
@@ -363,6 +369,13 @@ if st.session_state.warped["Front"]:
             ])
 
             scene = trimesh.Scene(meshes)
+
+            # --- GENERATE PREVIEW GLB ---
+            try:
+                preview_glb_bytes = scene.export(file_type='glb')
+                st.session_state['preview_glb_b64'] = base64.b64encode(preview_glb_bytes).decode()
+            except Exception:
+                st.session_state['preview_glb_b64'] = None
 
             # --- PRE-RENDER IMAGE BUFFERS ---
             img_buffers = {}
@@ -452,4 +465,40 @@ if st.session_state.warped["Front"]:
                         mpz.writestr("material.json", json.dumps(ens_json, indent=2))
                     zf.writestr(f"{m_name}.matpkg", mp_buf.getvalue())
 
-            st.download_button("📦 DOWNLOAD PACKAGE", buf.getvalue(), f"MassingPro_{project_id}.zip", "application/zip")
+            st.session_state['pkg_zip'] = buf.getvalue()
+            st.session_state['pkg_name'] = f"MassingPro_{project_id}.zip"
+
+    if st.session_state.get('pkg_zip'):
+        st.download_button("📦 DOWNLOAD PACKAGE", st.session_state['pkg_zip'], st.session_state['pkg_name'], "application/zip", use_container_width=True)
+
+    if st.session_state.get('preview_glb_b64'):
+        st.markdown("### 🔍 3D Model Preview")
+        st.caption("Drag to orbit · Scroll to zoom · Right-click drag to pan")
+        glb_b64 = st.session_state['preview_glb_b64']
+        components.html(
+            f"""
+            <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+            <style>
+              model-viewer {{
+                width: 100%;
+                height: 520px;
+                background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+                border-radius: 8px;
+                border: 1px solid #333;
+              }}
+            </style>
+            <model-viewer
+              src="data:model/gltf-binary;base64,{glb_b64}"
+              camera-controls
+              auto-rotate
+              auto-rotate-delay="1000"
+              rotation-per-second="20deg"
+              shadow-intensity="0.6"
+              exposure="1.1"
+              tone-mapping="neutral"
+              min-camera-orbit="auto auto 5%"
+              max-camera-orbit="auto auto 200%"
+            ></model-viewer>
+            """,
+            height=540,
+        )
