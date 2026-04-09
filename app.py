@@ -184,7 +184,7 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
       camera-controls auto-rotate
       auto-rotate-delay="800" rotation-per-second="15deg"
       shadow-intensity="0.5" exposure="1.1" tone-mapping="neutral"
-      style="height:300px;">
+      style="height:308px;">
     </model-viewer>
     <div id="hint">Drag to orbit &middot; Scroll to zoom &middot; Right-click drag to pan</div>
   </div>
@@ -194,22 +194,27 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
     }
     send("streamlit:componentReady", {apiVersion: 1});
 
-    const SMALL = 346, LARGE = 620;
-    let expanded = false;
+    let currentGlb = null;
 
     document.getElementById('toolbar').addEventListener('click', () => {
-      expanded = !expanded;
-      document.getElementById('toggleBtn').innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
-      document.getElementById('mv').style.height = (expanded ? LARGE : SMALL) - 46 + 'px';
-      send("streamlit:setFrameHeight", {height: expanded ? LARGE : SMALL});
+      const isExpanded = document.getElementById('toggleBtn').innerHTML.includes('2921');
+      send("streamlit:setComponentValue", {value: {expanded: !isExpanded}});
     });
 
     window.addEventListener("message", function(e) {
       if (e.data.type !== "streamlit:render") return;
-      document.getElementById('mv').setAttribute(
-        'src', 'data:model/gltf-binary;base64,' + e.data.args.glb_b64
-      );
-      send("streamlit:setFrameHeight", {height: SMALL});
+      const args = e.data.args;
+      const h = args.panel_height || 370;
+      const expanded = h >= 650;
+      document.getElementById('toggleBtn').innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
+      document.getElementById('mv').style.height = (h - 62) + 'px';
+      if (args.glb_b64 !== currentGlb) {
+        currentGlb = args.glb_b64;
+        document.getElementById('mv').setAttribute(
+          'src', 'data:model/gltf-binary;base64,' + args.glb_b64
+        );
+      }
+      send("streamlit:setFrameHeight", {height: h});
     });
   </script>
 </body>
@@ -247,6 +252,29 @@ def process_depth_and_normals(image_pil, mask_b64, session, normal_strength):
     mag = np.sqrt((sobel_x * normal_strength)**2 + (sobel_y * normal_strength)**2 + 1.0)
     normal_map = np.stack([((-(sobel_x * normal_strength) / mag + 1.0) * 127.5), (((-(sobel_y * normal_strength) / mag) + 1.0) * 127.5), ((1.0 / mag) * 255)], axis=2).astype(np.uint8)
     return Image.fromarray((depth_filtered * 65535.0).astype(np.uint16), mode='I;16'), Image.fromarray(normal_map, mode='RGB')
+
+def _glb_add_doublesided(glb_bytes: bytes) -> bytes:
+    """Patch GLB materials to doubleSided=True for web preview only. Export is unaffected."""
+    try:
+        json_len = int.from_bytes(glb_bytes[12:16], 'little')
+        gltf = json.loads(glb_bytes[20:20 + json_len].decode('utf-8'))
+        for mat in gltf.get('materials', []):
+            mat['doubleSided'] = True
+        new_json = json.dumps(gltf, separators=(',', ':')).encode('utf-8')
+        pad = (4 - len(new_json) % 4) % 4
+        new_json += b' ' * pad
+        rest = glb_bytes[20 + json_len:]
+        new_total = 12 + 8 + len(new_json) + len(rest)
+        return (
+            (0x46546C67).to_bytes(4, 'little') +
+            (2).to_bytes(4, 'little') +
+            new_total.to_bytes(4, 'little') +
+            len(new_json).to_bytes(4, 'little') +
+            (0x4E4F534A).to_bytes(4, 'little') +
+            new_json + rest
+        )
+    except Exception:
+        return glb_bytes
 
 def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, face_name, project_id):
     mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
@@ -438,7 +466,7 @@ if st.session_state.warped["Front"]:
             # --- GENERATE PREVIEW GLB ---
             try:
                 preview_glb_bytes = scene.export(file_type='glb')
-                st.session_state['preview_glb_b64'] = base64.b64encode(preview_glb_bytes).decode()
+                st.session_state['preview_glb_b64'] = base64.b64encode(_glb_add_doublesided(preview_glb_bytes)).decode()
             except Exception:
                 st.session_state['preview_glb_b64'] = None
 
@@ -534,7 +562,16 @@ if st.session_state.warped["Front"]:
             st.session_state['pkg_name'] = f"MassingPro_{project_id}.zip"
 
     if st.session_state.get('preview_glb_b64'):
-        st_preview_panel(glb_b64=st.session_state['preview_glb_b64'], key="preview_panel")
+        _pexp = st.session_state.get('preview_expanded', False)
+        _result = st_preview_panel(
+            glb_b64=st.session_state['preview_glb_b64'],
+            panel_height=650 if _pexp else 370,
+            height=650 if _pexp else 370,
+            key="preview_panel"
+        )
+        if _result is not None and _result.get('expanded') != _pexp:
+            st.session_state['preview_expanded'] = _result['expanded']
+            st.rerun()
 
     if st.session_state.get('pkg_zip'):
         st.download_button("📦 DOWNLOAD PACKAGE", st.session_state['pkg_zip'], st.session_state['pkg_name'], "application/zip", use_container_width=True)
