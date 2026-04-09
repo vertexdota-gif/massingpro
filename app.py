@@ -206,7 +206,10 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
 
     document.getElementById('toolbar').addEventListener('click', () => {
       expanded = !expanded;
+      const h = expanded ? 650 : 370;
       document.getElementById('toggleBtn').innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
+      document.getElementById('mv').style.height = (h - 62) + 'px';
+      send("streamlit:setFrameHeight", {height: h});
       send("streamlit:setComponentValue", {value: {expanded: expanded}, dataType: "json"});
     });
 
@@ -474,7 +477,17 @@ if st.session_state.warped["Front"]:
 
             # --- GENERATE PREVIEW GLB ---
             try:
-                preview_glb_bytes = scene.export(file_type='glb')
+                def _rev_winding(m):
+                    r = trimesh.Trimesh(vertices=m.vertices, faces=m.faces[:, [0, 2, 1]], process=False)
+                    r.visual = m.visual
+                    return r
+                # Front (meshes[0]) and Back (meshes[1]) have inward normals due to vertex winding;
+                # reverse them for the preview only — export scene is untouched.
+                face_names_order = list(faces) + ["Top", "Bot"]
+                preview_meshes = [_rev_winding(m) if n in ("Front", "Back") else m
+                                  for m, n in zip(meshes, face_names_order)]
+                preview_scene = trimesh.Scene(preview_meshes)
+                preview_glb_bytes = preview_scene.export(file_type='glb')
                 st.session_state['preview_glb_b64'] = base64.b64encode(_glb_add_doublesided(preview_glb_bytes)).decode()
             except Exception:
                 st.session_state['preview_glb_b64'] = None
