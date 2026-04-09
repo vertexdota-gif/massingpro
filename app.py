@@ -291,6 +291,154 @@ def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, fa
     mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.9) if diffuse_img else material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
     mesh.visual = texture.TextureVisuals(uv=uvs, material=mat); return mesh
 
+def generate_collada_dae(project_id, plane_verts, img_buffers, blank_rgba):
+    """Generate a Collada 1.4.1 XML string for SketchUp import with textures."""
+    all_faces = ["Front", "Back", "Left", "Right", "Top", "Bot"]
+    textured = set(img_buffers.keys())
+    br, bg, bb = blank_rgba[0]/255.0, blank_rgba[1]/255.0, blank_rgba[2]/255.0
+
+    # --- library_images ---
+    images_xml = ""
+    for f in all_faces:
+        if f in textured:
+            m_name, a_f, d_f, n_f = img_buffers[f][0], img_buffers[f][1], img_buffers[f][2], img_buffers[f][3]
+            images_xml += f'''    <image id="img-{f}-albedo" name="{m_name}_Albedo">
+      <init_from>{a_f}</init_from>
+    </image>
+    <image id="img-{f}-normal" name="{m_name}_Normal">
+      <init_from>{n_f}</init_from>
+    </image>
+'''
+
+    # --- library_effects ---
+    effects_xml = ""
+    for f in all_faces:
+        if f in textured:
+            m_name = img_buffers[f][0]
+            n_f = img_buffers[f][3]
+            effects_xml += f'''    <effect id="effect-{f}">
+      <profile_COMMON>
+        <newparam sid="{f}-albedo-surface"><surface type="2D"><init_from>img-{f}-albedo</init_from></surface></newparam>
+        <newparam sid="{f}-albedo-sampler"><sampler2D><source>{f}-albedo-surface</source></sampler2D></newparam>
+        <newparam sid="{f}-normal-surface"><surface type="2D"><init_from>img-{f}-normal</init_from></surface></newparam>
+        <newparam sid="{f}-normal-sampler"><sampler2D><source>{f}-normal-surface</source></sampler2D></newparam>
+        <technique sid="common">
+          <phong>
+            <ambient><color>1 1 1 1</color></ambient>
+            <diffuse><texture texture="{f}-albedo-sampler" texcoord="UVMap"/></diffuse>
+            <specular><color>0 0 0 1</color></specular>
+            <shininess><float>0</float></shininess>
+          </phong>
+        </technique>
+        <extra><technique profile="FCOLLADA">
+          <bump bumptype="NORMALMAP"><texture texture="{f}-normal-sampler" texcoord="UVMap"/></bump>
+        </technique></extra>
+      </profile_COMMON>
+    </effect>
+'''
+        else:
+            effects_xml += f'''    <effect id="effect-{f}">
+      <profile_COMMON>
+        <technique sid="common">
+          <phong>
+            <diffuse><color>{br:.4f} {bg:.4f} {bb:.4f} 1</color></diffuse>
+            <specular><color>0 0 0 1</color></specular>
+          </phong>
+        </technique>
+      </profile_COMMON>
+    </effect>
+'''
+
+    # --- library_materials ---
+    materials_xml = ""
+    for f in all_faces:
+        if f in textured:
+            m_name = img_buffers[f][0]
+        else:
+            m_name = f"MassingPro_{project_id}_{f}_Blank"
+        materials_xml += f'''    <material id="mat-{f}" name="{m_name}">
+      <instance_effect url="#effect-{f}"/>
+    </material>
+'''
+
+    # --- library_geometries ---
+    geometries_xml = ""
+    for f in all_faces:
+        verts = plane_verts[f]
+        pos_vals = " ".join(f"{v:.6f}" for vert in verts for v in vert)
+        # UVs: same as existing exports [[0,1],[1,1],[1,0],[0,0]]
+        uv_vals = "0 1  1 1  1 0  0 0"
+        geometries_xml += f'''    <geometry id="geo-{f}" name="{f}">
+      <mesh>
+        <source id="geo-{f}-pos">
+          <float_array id="geo-{f}-pos-arr" count="12">{pos_vals}</float_array>
+          <technique_common>
+            <accessor source="#geo-{f}-pos-arr" count="4" stride="3">
+              <param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="geo-{f}-uvs">
+          <float_array id="geo-{f}-uvs-arr" count="8">{uv_vals}</float_array>
+          <technique_common>
+            <accessor source="#geo-{f}-uvs-arr" count="4" stride="2">
+              <param name="S" type="float"/><param name="T" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="geo-{f}-verts">
+          <input semantic="POSITION" source="#geo-{f}-pos"/>
+        </vertices>
+        <triangles count="2" material="mat-{f}-symbol">
+          <input semantic="VERTEX" source="#geo-{f}-verts" offset="0"/>
+          <input semantic="TEXCOORD" source="#geo-{f}-uvs" offset="1" set="0"/>
+          <p>0 0 1 1 2 2 0 0 2 2 3 3</p>
+        </triangles>
+      </mesh>
+    </geometry>
+'''
+
+    # --- library_visual_scenes ---
+    nodes_xml = ""
+    for f in all_faces:
+        nodes_xml += f'''      <node id="node-{f}" name="{f}" type="NODE">
+        <instance_geometry url="#geo-{f}">
+          <bind_material>
+            <technique_common>
+              <instance_material symbol="mat-{f}-symbol" target="#mat-{f}">
+                <bind_vertex_input semantic="UVMap" input_semantic="TEXCOORD" input_set="0"/>
+              </instance_material>
+            </technique_common>
+          </bind_material>
+        </instance_geometry>
+      </node>
+'''
+
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <contributor><authoring_tool>MassingPro</authoring_tool></contributor>
+    <unit name="meter" meter="1"/>
+    <up_axis>Y_UP</up_axis>
+  </asset>
+  <library_images>
+{images_xml}  </library_images>
+  <library_effects>
+{effects_xml}  </library_effects>
+  <library_materials>
+{materials_xml}  </library_materials>
+  <library_geometries>
+{geometries_xml}  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene" name="Scene">
+{nodes_xml}    </visual_scene>
+  </library_visual_scenes>
+  <scene>
+    <instance_visual_scene url="#Scene"/>
+  </scene>
+</COLLADA>
+'''
+
 # --- AUTO PERSPECTIVE DETECTION ---
 def order_quad_points(pts):
     """Order 4 points as TL, TR, BR, BL."""
@@ -440,7 +588,8 @@ if st.session_state.warped["Front"]:
         "Choose your target software pipeline:",
         [
             "Render Model (.obj + .mtl) - Best for strict Enscape material replacement",
-            "Visual Model (.glb) - Best for Rhino/SketchUp Viewports"
+            "Visual Model (.glb) - Best for Rhino/SketchUp Viewports",
+            "SketchUp / DAE (.dae) - Best for SketchUp Viewport & Render Engines"
         ],
         horizontal=False
     )
@@ -504,6 +653,12 @@ if st.session_state.warped["Front"]:
                 # --- GEOMETRY EXPORT (flat in ZIP root) ---
                 if "glb" in export_format.lower():
                     zf.writestr(f"MassingPro_{project_id}.glb", scene.export(file_type='glb'))
+                elif "dae" in export_format.lower():
+                    dae_xml = generate_collada_dae(project_id, plane_verts, img_buffers, blank_rgba)
+                    zf.writestr(f"MassingPro_{project_id}.dae", dae_xml)
+                    for f, (m_name, a_f, d_f, n_f, ab_bytes, db_bytes, nb_bytes) in img_buffers.items():
+                        zf.writestr(a_f, ab_bytes)
+                        zf.writestr(n_f, nb_bytes)
                 else:
                     obj_name = f"MassingPro_{project_id}.obj"
                     mtl_name = f"MassingPro_{project_id}.mtl"
