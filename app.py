@@ -178,7 +178,7 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
   <div id="panel">
     <div id="toolbar">
       <span id="title">3D MODEL PREVIEW</span>
-      <button id="toggleBtn">&#x2922; Expand</button>
+      <button id="toggleBtn" data-expanded="false">&#x2922; Expand</button>
     </div>
     <model-viewer id="mv"
       camera-controls auto-rotate
@@ -196,11 +196,13 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
 
     let currentGlb = null;
 
+    const btn = document.getElementById('toggleBtn');
+
     document.getElementById('toolbar').addEventListener('click', () => {
-      const btn = document.getElementById('toggleBtn');
-      const isExpanded = btn.innerHTML.includes('2921');
+      const isExpanded = btn.dataset.expanded === 'true';
       const newExpanded = !isExpanded;
       const newH = newExpanded ? 650 : 370;
+      btn.dataset.expanded = String(newExpanded);
       btn.innerHTML = newExpanded ? '&#x2921; Collapse' : '&#x2922; Expand';
       document.getElementById('mv').style.height = (newH - 62) + 'px';
       send("streamlit:setFrameHeight", {height: newH});
@@ -212,7 +214,8 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
       const args = e.data.args;
       const h = args.panel_height || 370;
       const expanded = h >= 650;
-      document.getElementById('toggleBtn').innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
+      btn.dataset.expanded = String(expanded);
+      btn.innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
       document.getElementById('mv').style.height = (h - 62) + 'px';
       requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
       if (args.glb_b64 !== currentGlb) {
@@ -582,9 +585,8 @@ if st.session_state.warped["Front"]:
             height=650 if _pexp else 370,
             key="preview_panel"
         )
-        if _result is not None and _result.get('expanded') != _pexp:
-            st.session_state['preview_expanded'] = _result['expanded']
-            st.rerun()
+        if _result is not None:
+            st.session_state['preview_expanded'] = _result.get('expanded', False)
 
     if st.session_state.get('pkg_zip'):
         st.download_button("📦 DOWNLOAD PACKAGE", st.session_state['pkg_zip'], st.session_state['pkg_name'], "application/zip", use_container_width=True)
