@@ -151,6 +151,71 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
     """)
 st_mask_drawer = components.declare_component("mask_drawer", path=MASK_DIR)
 
+PREVIEW_DIR = "preview_frontend"
+os.makedirs(PREVIEW_DIR, exist_ok=True)
+with open(f"{PREVIEW_DIR}/index.html", "w") as f:
+    f.write("""<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:transparent;overflow:hidden;">
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+  <style>
+    body { font-family: sans-serif; }
+    #panel {
+      width: 100%; background: #111827;
+      border: 1px solid #374151; border-radius: 10px;
+      overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    }
+    #toolbar {
+      height: 36px; background: #0f172a;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 12px; cursor: pointer; user-select: none;
+    }
+    #title { color: #9ca3af; font-size: 11px; font-weight: 600; letter-spacing: .06em; }
+    #toggleBtn { background: none; border: none; color: #6b7280; font-size: 16px; cursor: pointer; }
+    model-viewer { width: 100%; background: linear-gradient(180deg,#1a1a2e 0%,#16213e 100%); }
+    #hint { padding: 5px 12px; background: #0f172a; color: #4b5563; font-size: 10px; }
+  </style>
+  <div id="panel">
+    <div id="toolbar">
+      <span id="title">3D MODEL PREVIEW</span>
+      <button id="toggleBtn">&#x2922; Expand</button>
+    </div>
+    <model-viewer id="mv"
+      camera-controls auto-rotate
+      auto-rotate-delay="800" rotation-per-second="15deg"
+      shadow-intensity="0.5" exposure="1.1" tone-mapping="neutral"
+      style="height:300px;">
+    </model-viewer>
+    <div id="hint">Drag to orbit &middot; Scroll to zoom &middot; Right-click drag to pan</div>
+  </div>
+  <script>
+    function send(type, data) {
+      window.parent.postMessage(Object.assign({isStreamlitMessage:true, type}, data), "*");
+    }
+    send("streamlit:componentReady", {apiVersion: 1});
+
+    const SMALL = 346, LARGE = 620;
+    let expanded = false;
+
+    document.getElementById('toolbar').addEventListener('click', () => {
+      expanded = !expanded;
+      document.getElementById('toggleBtn').innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
+      document.getElementById('mv').style.height = (expanded ? LARGE : SMALL) - 46 + 'px';
+      send("streamlit:setFrameHeight", {height: expanded ? LARGE : SMALL});
+    });
+
+    window.addEventListener("message", function(e) {
+      if (e.data.type !== "streamlit:render") return;
+      document.getElementById('mv').setAttribute(
+        'src', 'data:model/gltf-binary;base64,' + e.data.args.glb_b64
+      );
+      send("streamlit:setFrameHeight", {height: SMALL});
+    });
+  </script>
+</body>
+</html>""")
+st_preview_panel = components.declare_component("preview_panel", path=PREVIEW_DIR)
+
 # --- CORE UTILITIES ---
 def pil_to_b64(img: Image.Image) -> str:
     buf = io.BytesIO(); img.save(buf, format="PNG"); return base64.b64encode(buf.getvalue()).decode()
@@ -272,6 +337,9 @@ st.title("MassingPro")
 faces = ["Front", "Back", "Left", "Right"]
 for k in ['masks', 'warped', 'auto_pts']:
     if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
+if 'preview_glb_b64' not in st.session_state: st.session_state['preview_glb_b64'] = None
+if 'pkg_zip' not in st.session_state: st.session_state['pkg_zip'] = None
+if 'pkg_name' not in st.session_state: st.session_state['pkg_name'] = None
 
 with st.sidebar:
     st.header("Project Dimensions")
@@ -317,6 +385,9 @@ for i, face in enumerate(faces):
                 if st.button("Reset Perspective", key=f"re_{face}"):
                     st.session_state.warped[face] = None
                     st.session_state.auto_pts[face] = None
+                    st.session_state['preview_glb_b64'] = None
+                    st.session_state['pkg_zip'] = None
+                    st.session_state['pkg_name'] = None
                     st.rerun()
                 cw = min(800, st.session_state.warped[face].width)
                 ch = int(st.session_state.warped[face].height * (cw / st.session_state.warped[face].width))
@@ -363,6 +434,13 @@ if st.session_state.warped["Front"]:
             ])
 
             scene = trimesh.Scene(meshes)
+
+            # --- GENERATE PREVIEW GLB ---
+            try:
+                preview_glb_bytes = scene.export(file_type='glb')
+                st.session_state['preview_glb_b64'] = base64.b64encode(preview_glb_bytes).decode()
+            except Exception:
+                st.session_state['preview_glb_b64'] = None
 
             # --- PRE-RENDER IMAGE BUFFERS ---
             img_buffers = {}
@@ -452,4 +530,11 @@ if st.session_state.warped["Front"]:
                         mpz.writestr("material.json", json.dumps(ens_json, indent=2))
                     zf.writestr(f"{m_name}.matpkg", mp_buf.getvalue())
 
-            st.download_button("📦 DOWNLOAD PACKAGE", buf.getvalue(), f"MassingPro_{project_id}.zip", "application/zip")
+            st.session_state['pkg_zip'] = buf.getvalue()
+            st.session_state['pkg_name'] = f"MassingPro_{project_id}.zip"
+
+    if st.session_state.get('preview_glb_b64'):
+        st_preview_panel(glb_b64=st.session_state['preview_glb_b64'], key="preview_panel")
+
+    if st.session_state.get('pkg_zip'):
+        st.download_button("📦 DOWNLOAD PACKAGE", st.session_state['pkg_zip'], st.session_state['pkg_name'], "application/zip", use_container_width=True)
