@@ -197,8 +197,14 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
     let currentGlb = null;
 
     document.getElementById('toolbar').addEventListener('click', () => {
-      const isExpanded = document.getElementById('toggleBtn').innerHTML.includes('2921');
-      send("streamlit:setComponentValue", {value: {expanded: !isExpanded}});
+      const btn = document.getElementById('toggleBtn');
+      const isExpanded = btn.innerHTML.includes('2921');
+      const newExpanded = !isExpanded;
+      const newH = newExpanded ? 650 : 370;
+      btn.innerHTML = newExpanded ? '&#x2921; Collapse' : '&#x2922; Expand';
+      document.getElementById('mv').style.height = (newH - 62) + 'px';
+      send("streamlit:setFrameHeight", {height: newH});
+      send("streamlit:setComponentValue", {value: {expanded: newExpanded}});
     });
 
     window.addEventListener("message", function(e) {
@@ -208,6 +214,7 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
       const expanded = h >= 650;
       document.getElementById('toggleBtn').innerHTML = expanded ? '&#x2921; Collapse' : '&#x2922; Expand';
       document.getElementById('mv').style.height = (h - 62) + 'px';
+      requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
       if (args.glb_b64 !== currentGlb) {
         currentGlb = args.glb_b64;
         document.getElementById('mv').setAttribute(
@@ -463,10 +470,16 @@ if st.session_state.warped["Front"]:
 
             scene = trimesh.Scene(meshes)
 
-            # --- GENERATE PREVIEW GLB ---
+            # --- GENERATE PREVIEW GLB (double-sided via reversed winding) ---
             try:
-                preview_glb_bytes = scene.export(file_type='glb')
-                st.session_state['preview_glb_b64'] = base64.b64encode(_glb_add_doublesided(preview_glb_bytes)).decode()
+                ds_meshes = []
+                for m in meshes:
+                    ds_meshes.append(m)
+                    flipped = m.copy()
+                    flipped.faces = flipped.faces[:, ::-1]
+                    ds_meshes.append(flipped)
+                preview_glb_bytes = trimesh.Scene(ds_meshes).export(file_type='glb')
+                st.session_state['preview_glb_b64'] = base64.b64encode(preview_glb_bytes).decode()
             except Exception:
                 st.session_state['preview_glb_b64'] = None
 
