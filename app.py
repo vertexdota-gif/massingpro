@@ -22,7 +22,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
     <html>
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
-          <p style="margin-bottom:8px;">📍 Click 4 corners (TL &rarr; TR &rarr; BR &rarr; BL). Drag to adjust.</p>
+          <p style="margin:0 0 8px 0;font-size:13px;color:#d1d5db;">Click the <strong>four corners</strong> of the building face in order: top-left &rarr; top-right &rarr; bottom-right &rarr; bottom-left. Drag any point to fine-tune.</p>
           <canvas id="mycanvas" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear</button>
           <button id="btnSend" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Extract Perspective</button>
@@ -45,10 +45,21 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
                 img.src = 'data:image/png;base64,' + args.img_b64;
                 drawState = function() {
                     ctx.drawImage(img, 0, 0); ctx.lineWidth = 3;
+                    const labels = ['TL', 'TR', 'BR', 'BL'];
                     for (let i=0; i<points.length; i++) {
-                        ctx.beginPath(); ctx.arc(points[i].x, points[i].y, 7, 0, Math.PI*2);
-                        ctx.fillStyle = dragging === i ? '#ffaa00' : '#ff4b4b'; ctx.fill();
-                        ctx.strokeStyle = '#ff4b4b'; ctx.stroke();
+                        const px = points[i].x, py = points[i].y;
+                        const fill = dragging === i ? '#ffaa00' : '#ff4b4b';
+                        ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI*2);
+                        ctx.fillStyle = fill; ctx.fill();
+                        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.stroke();
+                        ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = '#ffffff';
+                        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                        ctx.fillText(String(i + 1), px, py);
+                        if (labels[i]) {
+                            ctx.font = '11px sans-serif'; ctx.fillStyle = fill;
+                            ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                            ctx.fillText(labels[i], px + 13, py - 6);
+                        }
                     }
                     if (points.length > 1) {
                         ctx.strokeStyle = '#ff4b4b'; ctx.lineWidth = 2;
@@ -107,6 +118,7 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
     <html>
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
+          <p style="margin:0 0 8px 0;font-size:13px;color:#d1d5db;">🖌️ Brush over anything that isn&#39;t part of the building surface — sky, scaffolding, vehicles, trees. This keeps the 3D texture clean. Click <strong>Save Mask</strong> when done.</p>
           <canvas id="mycanvas" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear Brush</button>
           <button id="btnSend" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Save Mask</button>
@@ -120,7 +132,7 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
                 initialized = true; const args = event.data.args;
                 const canvas = document.getElementById('mycanvas');
                 canvas.width = args.canvas_w; canvas.height = args.canvas_h;
-                send("streamlit:setFrameHeight", {height: args.canvas_h + 100});
+                send("streamlit:setFrameHeight", {height: args.canvas_h + 130});
                 const ctx = canvas.getContext('2d');
                 const offscreen = document.createElement('canvas');
                 offscreen.width = args.canvas_w; offscreen.height = args.canvas_h;
@@ -218,7 +230,7 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
       const args = e.data.args;
       if (args.glb_b64 !== currentGlb) {
         currentGlb = args.glb_b64;
-        applyExpanded(false);
+        applyExpanded(true);
         mv.setAttribute('src', 'data:model/gltf-binary;base64,' + args.glb_b64);
       } else {
         applyExpanded(isExpanded);
@@ -522,8 +534,17 @@ run()
 '''
 
 # --- UI APP ---
-st.set_page_config(page_title="MassingPro", layout="wide")
-st.title("MassingPro")
+MAX_CANVAS_H = 480
+st.set_page_config(page_title="MassingPro", page_icon="🏗️", layout="wide")
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap');
+html, body, [class*="css"], .stApp, .stMarkdown, .stButton, input, label, .stTextInput,
+.stNumberInput, .stSelectbox, .stRadio, .stSlider, .stFileUploader, .stTabs, .stExpander {
+    font-family: 'Neutra Text', 'Neutra Display', 'Jost', 'Futura', sans-serif !important;
+}
+</style>
+""", unsafe_allow_html=True)
 faces = ["Front", "Back", "Left", "Right"]
 for k in ['masks', 'warped', 'auto_pts']:
     if k not in st.session_state: st.session_state[k] = {f: None for f in faces}
@@ -532,11 +553,43 @@ if 'pkg_zip' not in st.session_state: st.session_state['pkg_zip'] = None
 if 'pkg_name' not in st.session_state: st.session_state['pkg_name'] = None
 
 with st.sidebar:
-    st.header("Project Dimensions")
-    dim_x, dim_y, dim_z = st.number_input("Width (X) m", 1.0, 55.0, value=10.0), st.number_input("Depth (Y) m", 1.0, 55.0, value=15.0), st.number_input("Height (Z) m", 1.0, 68.0, value=12.0)
-    blank_color, n_strength = st.color_picker("Empty Face Color", "#2A2D35"), st.slider("Normal Intensity", 0.1, 5.0, 2.0)
+    st.markdown("## MassingPro")
+    st.caption("Generate textured 3D massing from facade photos — ready for Rhino, SketchUp & Enscape.")
+    st.divider()
+    st.subheader("Building Dimensions")
+    st.caption("Enter the real-world size of the building in metres.")
+    col1, col2 = st.columns(2)
+    with col1:
+        dim_x = st.number_input("Width (X) m", 1.0, 55.0, value=10.0, step=0.25)
+        dim_z = st.number_input("Height (Z) m", 1.0, 68.0, value=12.0, step=0.25)
+    with col2:
+        dim_y = st.number_input("Depth (Y) m", 1.0, 55.0, value=15.0, step=0.25)
+    st.divider()
+    st.subheader("Appearance")
+    blank_color = st.color_picker("Untextured Face Colour", "#2A2D35")
+    n_strength = st.slider(
+        "Surface Relief",
+        0.1, 5.0, 2.0,
+        help="How strongly the facade depth is translated into surface texture detail. Higher = bolder relief. 2.0 is a good default for most facades."
+    )
 
-tabs = st.tabs([f" {f} Facade" for f in faces])
+tabs = st.tabs([f"{f} Facade" for f in faces])
+
+with st.expander("How to use MassingPro", expanded=False):
+    st.markdown(
+        """
+**1. Set your building dimensions** in the left panel — width, depth, and height in metres.
+
+**2. Upload a facade photo** in the Front tab (required). Back, Left, and Right are optional for a fully textured model.
+
+**3. Frame the facade** — click the four corners of the building face on the photo in order, then click **Extract Perspective** to remove distortion. Use **Auto-Detect** to get a starting position, then drag the points to refine.
+
+**4. Remove unwanted elements** (optional) — use the brush to paint over sky, scaffolding, parked cars, or trees so they don't affect the surface texture.
+
+**5. Choose your export format** and click **Build 3D Model**. Review the 3D preview below, then download your package.
+        """
+    )
+
 face_dims = {"Front": (dim_x, dim_z), "Back": (dim_x, dim_z), "Left": (dim_y, dim_z), "Right": (dim_y, dim_z)}
 uv_coords = np.array([[0, 1], [1, 1], [1, 0], [0, 0]])
 
@@ -548,6 +601,9 @@ for i, face in enumerate(faces):
             if st.session_state.warped[face] is None:
                 cw = min(800, raw.width)
                 ch = int(raw.height * (cw / raw.width))
+                if ch > MAX_CANVAS_H:
+                    ch = MAX_CANVAS_H
+                    cw = int(raw.width * (ch / raw.height))
 
                 col_a, col_b = st.columns([1, 5])
                 with col_a:
@@ -581,6 +637,9 @@ for i, face in enumerate(faces):
                     st.rerun()
                 cw = min(800, st.session_state.warped[face].width)
                 ch = int(st.session_state.warped[face].height * (cw / st.session_state.warped[face].width))
+                if ch > MAX_CANVAS_H:
+                    ch = MAX_CANVAS_H
+                    cw = int(st.session_state.warped[face].width * (ch / st.session_state.warped[face].height))
                 mask_data = st_mask_drawer(img_b64=pil_to_b64(st.session_state.warped[face].resize((cw, ch))), canvas_w=cw, canvas_h=ch, key=f"mask_{face}")
                 if mask_data: st.session_state.masks[face] = mask_data; st.success("✅ Mask Saved!")
 
@@ -588,18 +647,18 @@ st.divider()
 
 # --- USER FORMAT SELECTION ---
 if st.session_state.warped["Front"]:
-    st.markdown("### 📦 Export Options")
+    st.markdown("### Export")
     export_format = st.radio(
-        "Choose your target software pipeline:",
+        "Export format:",
         [
-            "Render Model (.obj + .mtl) - Best for strict Enscape material replacement",
-            "Visual Model (.glb) - Best for Rhino/SketchUp Viewports",
-            "SketchUp / DAE (.dae) - Best for SketchUp Viewport & Render Engines"
+            "OBJ + MTL (.obj) — for Enscape material replacement in Rhino",
+            "GLTF Binary (.glb) — for Rhino & SketchUp viewports",
+            "Collada (.dae) — for SketchUp with V-Ray or Enscape"
         ],
         horizontal=False
     )
 
-    if st.button("BUILD MASSING PRO ASSET", type="primary", use_container_width=True):
+    if st.button("Build 3D Model", type="primary", use_container_width=True):
         with st.spinner("Compiling Package..."):
             session, project_id = ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider']), str(random.randint(1000, 999999))
             blank_rgba, meshes, displacements, normals = [int(blank_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)] + [255], [], {}, {}
@@ -745,4 +804,4 @@ if st.session_state.warped["Front"]:
         )
 
     if st.session_state.get('pkg_zip'):
-        st.download_button("📦 DOWNLOAD PACKAGE", st.session_state['pkg_zip'], st.session_state['pkg_name'], "application/zip", use_container_width=True)
+        st.download_button("⬇️ Download Package", st.session_state['pkg_zip'], st.session_state['pkg_name'], "application/zip", use_container_width=True)
