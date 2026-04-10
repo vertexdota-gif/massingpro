@@ -23,13 +23,13 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
           <p style="margin:0 0 6px 0;font-size:13px;color:#d1d5db;">Click the <strong>four corners</strong> of the building face in order: top-left &rarr; top-right &rarr; bottom-right &rarr; bottom-left. Drag any point to fine-tune.</p>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-            <span style="font-size:12px;color:#9ca3af;">Zoom:</span>
-            <button id="zoomOut" style="padding:1px 9px;background:#1f2937;color:white;border:1px solid #374151;border-radius:4px;cursor:pointer;font-size:15px;line-height:1.4;">&#8722;</button>
-            <span id="zoomLabel" style="font-size:12px;color:#d1d5db;min-width:28px;text-align:center;">1&times;</span>
-            <button id="zoomIn" style="padding:1px 9px;background:#1f2937;color:white;border:1px solid #374151;border-radius:4px;cursor:pointer;font-size:15px;line-height:1.4;">&#43;</button>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <span style="font-size:11px;color:#9ca3af;">Zoom:</span>
+            <button id="zoomOut" style="padding:0 6px;background:#1f2937;color:white;border:1px solid #374151;border-radius:3px;cursor:pointer;font-size:11px;line-height:1.8;">&#8722;</button>
+            <span id="zoomLabel" style="font-size:11px;color:#d1d5db;min-width:24px;text-align:center;">1&times;</span>
+            <button id="zoomIn" style="padding:0 6px;background:#1f2937;color:white;border:1px solid #374151;border-radius:3px;cursor:pointer;font-size:11px;line-height:1.8;">&#43;</button>
           </div>
-          <div id="canvasWrap" style="overflow:auto;border:1px solid #ff4b4b;border-radius:4px;">
+          <div id="canvasWrap">
             <canvas id="mycanvas" style="cursor:crosshair;display:block;"></canvas>
           </div>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear</button>
@@ -52,9 +52,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
             if (!initialized) {
                 initialized = true;
                 const canvas = document.getElementById('mycanvas');
-                const wrap = document.getElementById('canvasWrap');
                 canvas.width = args.canvas_w; canvas.height = args.canvas_h;
-                wrap.style.height = args.canvas_h + 'px';
                 send("streamlit:setFrameHeight", {height: args.canvas_h + 130});
                 const ctx = canvas.getContext('2d'); const img = new Image();
                 scaleX = args.raw_w / args.canvas_w; scaleY = args.raw_h / args.canvas_h;
@@ -63,6 +61,7 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
                     canvas.style.width  = (args.canvas_w * zoom) + 'px';
                     canvas.style.height = (args.canvas_h * zoom) + 'px';
                     document.getElementById('zoomLabel').textContent = zoom + '\u00d7';
+                    send("streamlit:setFrameHeight", {height: Math.ceil(args.canvas_h * zoom) + 130});
                 }
                 applyZoom();
                 document.getElementById('zoomOut').onclick = () => {
@@ -149,13 +148,13 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
           <p style="margin:0 0 6px 0;font-size:13px;color:#d1d5db;">🖌️ Brush over anything that isn&#39;t part of the building surface — sky, scaffolding, vehicles, trees. This keeps the 3D texture clean. Click <strong>Save Mask</strong> when done.</p>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-            <span style="font-size:12px;color:#9ca3af;">Zoom:</span>
-            <button id="zoomOut" style="padding:1px 9px;background:#1f2937;color:white;border:1px solid #374151;border-radius:4px;cursor:pointer;font-size:15px;line-height:1.4;">&#8722;</button>
-            <span id="zoomLabel" style="font-size:12px;color:#d1d5db;min-width:28px;text-align:center;">1&times;</span>
-            <button id="zoomIn" style="padding:1px 9px;background:#1f2937;color:white;border:1px solid #374151;border-radius:4px;cursor:pointer;font-size:15px;line-height:1.4;">&#43;</button>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <span style="font-size:11px;color:#9ca3af;">Zoom:</span>
+            <button id="zoomOut" style="padding:0 6px;background:#1f2937;color:white;border:1px solid #374151;border-radius:3px;cursor:pointer;font-size:11px;line-height:1.8;">&#8722;</button>
+            <span id="zoomLabel" style="font-size:11px;color:#d1d5db;min-width:24px;text-align:center;">1&times;</span>
+            <button id="zoomIn" style="padding:0 6px;background:#1f2937;color:white;border:1px solid #374151;border-radius:3px;cursor:pointer;font-size:11px;line-height:1.8;">&#43;</button>
           </div>
-          <div id="canvasWrap" style="overflow:auto;border:1px solid #ff4b4b;border-radius:4px;">
+          <div id="canvasWrap">
             <canvas id="mycanvas" style="cursor:crosshair;display:block;"></canvas>
           </div>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear Brush</button>
@@ -171,9 +170,7 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
             if (event.data.type === "streamlit:render" && !initialized) {
                 initialized = true; const args = event.data.args;
                 const canvas = document.getElementById('mycanvas');
-                const wrap = document.getElementById('canvasWrap');
                 canvas.width = args.canvas_w; canvas.height = args.canvas_h;
-                wrap.style.height = args.canvas_h + 'px';
                 send("streamlit:setFrameHeight", {height: args.canvas_h + 160});
                 const ctx = canvas.getContext('2d');
                 const offscreen = document.createElement('canvas');
@@ -186,6 +183,7 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
                     canvas.style.width  = (args.canvas_w * zoom) + 'px';
                     canvas.style.height = (args.canvas_h * zoom) + 'px';
                     document.getElementById('zoomLabel').textContent = zoom + '\u00d7';
+                    send("streamlit:setFrameHeight", {height: Math.ceil(args.canvas_h * zoom) + 160});
                 }
                 applyZoom();
                 document.getElementById('zoomOut').onclick = () => {
@@ -635,7 +633,7 @@ if 'pkg_zip' not in st.session_state: st.session_state['pkg_zip'] = None
 if 'pkg_name' not in st.session_state: st.session_state['pkg_name'] = None
 
 with st.sidebar:
-    st.markdown('<p style="font-size:2rem;font-weight:700;letter-spacing:-0.02em;margin:0 0 2px 0;line-height:1.1;">MassingPro</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:2rem;font-weight:700;letter-spacing:-0.02em;margin:0 0 10px 0;line-height:1.1;">MassingPro</p>', unsafe_allow_html=True)
     st.caption("Generate a textured 3D massing model from facade photos.")
     st.divider()
     st.subheader("Building Dimensions")
