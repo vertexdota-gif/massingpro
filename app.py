@@ -23,6 +23,12 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
           <p style="margin:0 0 8px 0;font-size:13px;color:#d1d5db;">Click the <strong>four corners</strong> of the building face in order: top-left &rarr; top-right &rarr; bottom-right &rarr; bottom-left. Drag any point to fine-tune.</p>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <span style="font-size:11px;color:#9ca3af;">Zoom:</span>
+            <button id="zoomOut" style="padding:0 6px;background:#1f2937;color:white;border:1px solid #374151;border-radius:3px;cursor:pointer;font-size:11px;line-height:1.8;">&#8722;</button>
+            <span id="zoomLabel" style="font-size:11px;color:#d1d5db;min-width:24px;text-align:center;">1&times;</span>
+            <button id="zoomIn" style="padding:0 6px;background:#1f2937;color:white;border:1px solid #374151;border-radius:3px;cursor:pointer;font-size:11px;line-height:1.8;">&#43;</button>
+          </div>
           <canvas id="mycanvas" style="cursor:crosshair;display:block;"></canvas><br>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear</button>
           <button id="btnSend" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Extract Perspective</button>
@@ -32,19 +38,41 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
         send("streamlit:componentReady", {apiVersion: 1});
         let initialized = false; let points = []; let dragging = -1;
         let scaleX = 1; let scaleY = 1; let drawState = null;
+        let zoom = 1; let baseW = 0; let baseH = 0;
+        const ZOOM_STEPS = [1, 1.5, 2, 3];
         window.addEventListener("message", function(event) {
             if (event.data.type !== "streamlit:render") return;
             const args = event.data.args;
             if (!initialized) {
                 initialized = true;
                 const canvas = document.getElementById('mycanvas');
-                canvas.width = args.canvas_w; canvas.height = args.canvas_h;
-                send("streamlit:setFrameHeight", {height: args.canvas_h + 80});
+                baseW = args.canvas_w; baseH = args.canvas_h;
+                canvas.width = baseW; canvas.height = baseH;
+                send("streamlit:setFrameHeight", {height: baseH + 110});
                 const ctx = canvas.getContext('2d'); const img = new Image();
-                scaleX = args.raw_w / args.canvas_w; scaleY = args.raw_h / args.canvas_h;
+                scaleX = args.raw_w / baseW; scaleY = args.raw_h / baseH;
                 img.src = 'data:image/png;base64,' + args.img_b64;
+                function setZoom(newZoom) {
+                    const ratio = newZoom / zoom; zoom = newZoom;
+                    points = points.map(p => ({x: p.x * ratio, y: p.y * ratio}));
+                    canvas.width = Math.round(baseW * zoom);
+                    canvas.height = Math.round(baseH * zoom);
+                    scaleX = args.raw_w / canvas.width;
+                    scaleY = args.raw_h / canvas.height;
+                    document.getElementById('zoomLabel').textContent = zoom + '\u00d7';
+                    send("streamlit:setFrameHeight", {height: canvas.height + 110});
+                    if (img.complete) drawState();
+                }
+                document.getElementById('zoomOut').onclick = () => {
+                    const i = ZOOM_STEPS.indexOf(zoom);
+                    if (i > 0) setZoom(ZOOM_STEPS[i - 1]);
+                };
+                document.getElementById('zoomIn').onclick = () => {
+                    const i = ZOOM_STEPS.indexOf(zoom);
+                    if (i < ZOOM_STEPS.length - 1) setZoom(ZOOM_STEPS[i + 1]);
+                };
                 drawState = function() {
-                    ctx.drawImage(img, 0, 0); ctx.lineWidth = 3;
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height); ctx.lineWidth = 3;
                     const labels = ['TL', 'TR', 'BR', 'BL'];
                     for (let i=0; i<points.length; i++) {
                         const px = points[i].x, py = points[i].y;
@@ -119,6 +147,12 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
           <p style="margin:0 0 8px 0;font-size:13px;color:#d1d5db;">🖌️ Brush over anything that isn&#39;t part of the building surface — sky, scaffolding, vehicles, trees. This keeps the 3D texture clean. Click <strong>Save Mask</strong> when done.</p>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <span style="font-size:11px;color:#9ca3af;">Zoom:</span>
+            <button id="zoomOut" style="padding:0 6px;background:#1f2937;color:white;border:1px solid #374151;border-radius:3px;cursor:pointer;font-size:11px;line-height:1.8;">&#8722;</button>
+            <span id="zoomLabel" style="font-size:11px;color:#d1d5db;min-width:24px;text-align:center;">1&times;</span>
+            <button id="zoomIn" style="padding:0 6px;background:#1f2937;color:white;border:1px solid #374151;border-radius:3px;cursor:pointer;font-size:11px;line-height:1.8;">&#43;</button>
+          </div>
           <canvas id="mycanvas" style="cursor:crosshair;display:block;"></canvas><br>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear Brush</button>
           <button id="btnSend" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Save Mask</button>
@@ -127,30 +161,54 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
         function send(type, data) { window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*"); }
         send("streamlit:componentReady", {apiVersion: 1});
         let initialized = false;
+        let zoom = 1; let baseW = 0; let baseH = 0;
+        const ZOOM_STEPS = [1, 1.5, 2, 3];
         window.addEventListener("message", function(event) {
             if (event.data.type === "streamlit:render" && !initialized) {
                 initialized = true; const args = event.data.args;
                 const canvas = document.getElementById('mycanvas');
-                canvas.width = args.canvas_w; canvas.height = args.canvas_h;
-                send("streamlit:setFrameHeight", {height: args.canvas_h + 100});
+                baseW = args.canvas_w; baseH = args.canvas_h;
+                canvas.width = baseW; canvas.height = baseH;
+                send("streamlit:setFrameHeight", {height: baseH + 110});
                 const ctx = canvas.getContext('2d');
                 const offscreen = document.createElement('canvas');
-                offscreen.width = args.canvas_w; offscreen.height = args.canvas_h;
+                offscreen.width = baseW; offscreen.height = baseH;
                 const octx = offscreen.getContext('2d');
                 const img = new Image();
                 img.src = 'data:image/png;base64,' + args.img_b64;
-                img.onload = () => ctx.drawImage(img, 0, 0);
+                function redrawVisible() {
+                    canvas.width = Math.round(baseW * zoom);
+                    canvas.height = Math.round(baseH * zoom);
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    ctx.globalAlpha = 0.4;
+                    ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+                    ctx.globalAlpha = 1.0;
+                }
+                img.onload = () => redrawVisible();
+                function setZoom(newZoom) {
+                    zoom = newZoom;
+                    document.getElementById('zoomLabel').textContent = zoom + '\u00d7';
+                    send("streamlit:setFrameHeight", {height: Math.round(baseH * zoom) + 110});
+                    redrawVisible();
+                }
+                document.getElementById('zoomOut').onclick = () => {
+                    const i = ZOOM_STEPS.indexOf(zoom); if (i > 0) setZoom(ZOOM_STEPS[i - 1]);
+                };
+                document.getElementById('zoomIn').onclick = () => {
+                    const i = ZOOM_STEPS.indexOf(zoom); if (i < ZOOM_STEPS.length - 1) setZoom(ZOOM_STEPS[i + 1]);
+                };
                 let painting = false;
                 function draw(e) {
                     const r = canvas.getBoundingClientRect(); const x = e.clientX - r.left; const y = e.clientY - r.top;
-                    ctx.fillStyle = 'rgba(255,0,0,0.4)'; ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI * 2); ctx.fill();
-                    octx.fillStyle = 'rgba(255,0,0,1.0)'; octx.beginPath(); octx.arc(x, y, 15, 0, Math.PI * 2); octx.fill();
+                    const ox = x / zoom; const oy = y / zoom;
+                    octx.fillStyle = 'rgba(255,0,0,1.0)'; octx.beginPath(); octx.arc(ox, oy, 15, 0, Math.PI * 2); octx.fill();
+                    redrawVisible();
                 }
                 canvas.addEventListener('mousedown', e => { painting = true; draw(e); });
                 canvas.addEventListener('mousemove', e => { if (painting) draw(e); });
                 canvas.addEventListener('mouseup', () => painting = false);
                 canvas.addEventListener('mouseleave', () => painting = false);
-                document.getElementById('btnClear').onclick = () => { ctx.drawImage(img, 0, 0); octx.clearRect(0, 0, offscreen.width, offscreen.height); };
+                document.getElementById('btnClear').onclick = () => { octx.clearRect(0, 0, offscreen.width, offscreen.height); redrawVisible(); };
                 document.getElementById('btnSend').onclick = () => {
                     const maskB64 = offscreen.toDataURL('image/png').split(',')[1];
                     send("streamlit:setComponentValue", {value: maskB64});
