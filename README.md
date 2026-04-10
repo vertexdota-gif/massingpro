@@ -95,6 +95,16 @@ All materials follow the pattern `MassingPro_{project_id}_{face}` (e.g. `Massing
 
 ## Changelog
 
+### 2026-04-10
+- **UI overhaul for design professionals** — dark Streamlit chrome now matches the red accent used throughout (via `.streamlit/config.toml`); Jost / Neutra font stack applied globally.
+- **Sidebar redesign** — large bold MassingPro title, tightened vertical spacing so all controls fit without scrolling, faint grey borders on dimension input fields and +/− buttons, step size set to 0.25 m for precise nudging, "Surface Relief" slider replaces "Normal Intensity" with an in-place tooltip explanation.
+- **How to use guide** — moved from main content area to bottom of sidebar as a collapsible expander; written in plain design-professional language.
+- **Perspective-corrected image** — display constrained to 60 % of main area width to reduce scrolling between steps.
+- **Canvas improvements** — numbered corner labels (1 TL / 2 TR / 3 BR / 4 BL) on the perspective picker; plain-English instruction text on both the picker and mask painter canvases.
+- **3D preview auto-expands** after each build so the model is visible immediately without a manual click.
+- **Faster builds** — ONNX inference session cached with `@st.cache_resource`; model loads from disk once per server process, eliminating repeated initialisation overhead on subsequent builds.
+- **Export labels** — shortened and made format-centric (e.g. "OBJ + MTL (.obj)", "GLTF Binary (.glb)", "Collada (.dae)").
+
 ### 2026-04-09
 - **SketchUp / DAE export** — new export option generating a Collada 1.4.1 file with albedo textures bound to `<diffuse>` (viewport) and normal maps via FCOLLADA bump technique (V-Ray / Enscape for SketchUp). Displacement maps and `.matpkg` sidecars included in the ZIP.
 - **Interactive 3D preview** — inline model-viewer panel renders a double-sided GLB preview directly in the app after each build, with expand/collapse toggle.

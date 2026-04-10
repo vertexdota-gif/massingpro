@@ -242,6 +242,10 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
 </html>""")
 st_preview_panel = components.declare_component("preview_panel", path=PREVIEW_DIR)
 
+@st.cache_resource
+def _load_depth_session():
+    return ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider'])
+
 # --- CORE UTILITIES ---
 def pil_to_b64(img: Image.Image) -> str:
     buf = io.BytesIO(); img.save(buf, format="PNG"); return base64.b64encode(buf.getvalue()).decode()
@@ -543,6 +547,26 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stButton, input, label, .stTex
 .stNumberInput, .stSelectbox, .stRadio, .stSlider, .stFileUploader, .stTabs, .stExpander {
     font-family: 'Neutra Text', 'Neutra Display', 'Jost', 'Futura', sans-serif !important;
 }
+/* Faint border on number inputs and their +/- buttons */
+[data-testid="stNumberInput"] input {
+    border: 1px solid #374151 !important;
+    border-radius: 4px !important;
+}
+[data-testid="stNumberInput"] button {
+    border: 1px solid #374151 !important;
+    border-radius: 4px !important;
+}
+/* Tighten sidebar vertical spacing so all items fit without scrolling */
+section[data-testid="stSidebar"] > div:first-child {
+    padding-top: 1.5rem !important;
+    padding-bottom: 1rem !important;
+}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.4rem !important;
+}
+section[data-testid="stSidebar"] hr {
+    margin: 0.5rem 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 faces = ["Front", "Back", "Left", "Right"]
@@ -553,11 +577,10 @@ if 'pkg_zip' not in st.session_state: st.session_state['pkg_zip'] = None
 if 'pkg_name' not in st.session_state: st.session_state['pkg_name'] = None
 
 with st.sidebar:
-    st.markdown("## MassingPro")
-    st.caption("Generate textured 3D massing from facade photos — ready for Rhino, SketchUp & Enscape.")
+    st.markdown('<p style="font-size:2rem;font-weight:700;letter-spacing:-0.02em;margin:0 0 2px 0;line-height:1.1;">MassingPro</p>', unsafe_allow_html=True)
+    st.caption("Generate a textured 3D massing model from facade photos.")
     st.divider()
     st.subheader("Building Dimensions")
-    st.caption("Enter the real-world size of the building in metres.")
     col1, col2 = st.columns(2)
     with col1:
         dim_x = st.number_input("Width (X) m", 1.0, 55.0, value=10.0, step=0.25)
@@ -572,23 +595,23 @@ with st.sidebar:
         0.1, 5.0, 2.0,
         help="How strongly the facade depth is translated into surface texture detail. Higher = bolder relief. 2.0 is a good default for most facades."
     )
+    st.divider()
+    with st.expander("How to use MassingPro"):
+        st.markdown(
+            """
+**1. Set building dimensions** — width, depth, and height in metres.
+
+**2. Upload a facade photo** in the Front tab (required). Back, Left, and Right are optional.
+
+**3. Frame the facade** — click the four corners of the building face in order, then click **Extract Perspective**. Use **Auto-Detect** as a starting point.
+
+**4. Remove unwanted elements** (optional) — brush over sky, scaffolding, vehicles, or trees.
+
+**5. Choose export format** and click **Build 3D Model**. Review the preview, then download.
+            """
+        )
 
 tabs = st.tabs([f"{f} Facade" for f in faces])
-
-with st.expander("How to use MassingPro", expanded=False):
-    st.markdown(
-        """
-**1. Set your building dimensions** in the left panel — width, depth, and height in metres.
-
-**2. Upload a facade photo** in the Front tab (required). Back, Left, and Right are optional for a fully textured model.
-
-**3. Frame the facade** — click the four corners of the building face on the photo in order, then click **Extract Perspective** to remove distortion. Use **Auto-Detect** to get a starting position, then drag the points to refine.
-
-**4. Remove unwanted elements** (optional) — use the brush to paint over sky, scaffolding, parked cars, or trees so they don't affect the surface texture.
-
-**5. Choose your export format** and click **Build 3D Model**. Review the 3D preview below, then download your package.
-        """
-    )
 
 face_dims = {"Front": (dim_x, dim_z), "Back": (dim_x, dim_z), "Left": (dim_y, dim_z), "Right": (dim_y, dim_z)}
 uv_coords = np.array([[0, 1], [1, 1], [1, 0], [0, 0]])
@@ -627,7 +650,9 @@ for i, face in enumerate(faces):
                     st.session_state.auto_pts[face] = None
                     st.rerun()
             else:
-                st.image(st.session_state.warped[face], use_container_width=True)
+                col_preview, _ = st.columns([3, 2])
+                with col_preview:
+                    st.image(st.session_state.warped[face], use_container_width=True)
                 if st.button("Reset Perspective", key=f"re_{face}"):
                     st.session_state.warped[face] = None
                     st.session_state.auto_pts[face] = None
@@ -660,7 +685,7 @@ if st.session_state.warped["Front"]:
 
     if st.button("Build 3D Model", type="primary", use_container_width=True):
         with st.spinner("Compiling Package..."):
-            session, project_id = ort.InferenceSession("depth_anything_v2_vits.onnx", providers=['CPUExecutionProvider']), str(random.randint(1000, 999999))
+            session, project_id = _load_depth_session(), str(random.randint(1000, 999999))
             blank_rgba, meshes, displacements, normals = [int(blank_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)] + [255], [], {}, {}
 
             plane_verts = {
