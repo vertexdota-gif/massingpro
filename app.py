@@ -288,7 +288,7 @@ with open(f"{PREVIEW_DIR}/index.html", "w") as f:
       const args = e.data.args;
       if (args.glb_b64 !== currentGlb) {
         currentGlb = args.glb_b64;
-        applyExpanded(true);
+        applyExpanded(false);
         mv.setAttribute('src', 'data:model/gltf-binary;base64,' + args.glb_b64);
       } else {
         applyExpanded(isExpanded);
@@ -361,7 +361,7 @@ def _glb_add_doublesided(glb_bytes: bytes) -> bytes:
 
 def create_textured_plane(vertices, uvs, diffuse_img, normal_img, blank_rgba, face_name, project_id):
     mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
-    if face_name == "Bot": mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=[blank_rgba]*2); return mesh
+    if face_name == "Bot": return mesh
     mat = material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}", baseColorTexture=diffuse_img, normalTexture=normal_img, metallicFactor=0.0, roughnessFactor=0.9) if diffuse_img else material.PBRMaterial(name=f"MassingPro_{project_id}_{face_name}_Blank", baseColorFactor=blank_rgba)
     mesh.visual = texture.TextureVisuals(uv=uvs, material=mat); return mesh
 
@@ -614,8 +614,10 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stButton, input, label, .stTex
     padding: 0 2px !important;
     font-size: 11px !important;
 }
-/* Tighten sidebar vertical spacing so all items fit without scrolling */
+/* Sidebar default width */
+section[data-testid="stSidebar"] { min-width: 340px !important; width: 340px !important; }
 section[data-testid="stSidebar"] > div:first-child {
+    width: 340px !important;
     padding-top: 1.5rem !important;
     padding-bottom: 1rem !important;
 }
