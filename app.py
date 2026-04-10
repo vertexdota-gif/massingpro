@@ -22,8 +22,16 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
     <html>
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
-          <p style="margin:0 0 8px 0;font-size:13px;color:#d1d5db;">Click the <strong>four corners</strong> of the building face in order: top-left &rarr; top-right &rarr; bottom-right &rarr; bottom-left. Drag any point to fine-tune.</p>
-          <canvas id="mycanvas" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
+          <p style="margin:0 0 6px 0;font-size:13px;color:#d1d5db;">Click the <strong>four corners</strong> of the building face in order: top-left &rarr; top-right &rarr; bottom-right &rarr; bottom-left. Drag any point to fine-tune.</p>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-size:12px;color:#9ca3af;">Zoom:</span>
+            <button id="zoomOut" style="padding:1px 9px;background:#1f2937;color:white;border:1px solid #374151;border-radius:4px;cursor:pointer;font-size:15px;line-height:1.4;">&#8722;</button>
+            <span id="zoomLabel" style="font-size:12px;color:#d1d5db;min-width:28px;text-align:center;">1&times;</span>
+            <button id="zoomIn" style="padding:1px 9px;background:#1f2937;color:white;border:1px solid #374151;border-radius:4px;cursor:pointer;font-size:15px;line-height:1.4;">&#43;</button>
+          </div>
+          <div id="canvasWrap" style="overflow:auto;border:1px solid #ff4b4b;border-radius:4px;">
+            <canvas id="mycanvas" style="cursor:crosshair;display:block;"></canvas>
+          </div>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear</button>
           <button id="btnSend" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Extract Perspective</button>
       </div>
@@ -32,17 +40,39 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
         send("streamlit:componentReady", {apiVersion: 1});
         let initialized = false; let points = []; let dragging = -1;
         let scaleX = 1; let scaleY = 1; let drawState = null;
+        let zoom = 1;
+        const ZOOM_STEPS = [1, 1.5, 2, 2.5, 3];
+        function canvasCoords(e, canvas) {
+            const r = canvas.getBoundingClientRect();
+            return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom };
+        }
         window.addEventListener("message", function(event) {
             if (event.data.type !== "streamlit:render") return;
             const args = event.data.args;
             if (!initialized) {
                 initialized = true;
                 const canvas = document.getElementById('mycanvas');
+                const wrap = document.getElementById('canvasWrap');
                 canvas.width = args.canvas_w; canvas.height = args.canvas_h;
-                send("streamlit:setFrameHeight", {height: args.canvas_h + 100});
+                wrap.style.height = args.canvas_h + 'px';
+                send("streamlit:setFrameHeight", {height: args.canvas_h + 130});
                 const ctx = canvas.getContext('2d'); const img = new Image();
                 scaleX = args.raw_w / args.canvas_w; scaleY = args.raw_h / args.canvas_h;
                 img.src = 'data:image/png;base64,' + args.img_b64;
+                function applyZoom() {
+                    canvas.style.width  = (args.canvas_w * zoom) + 'px';
+                    canvas.style.height = (args.canvas_h * zoom) + 'px';
+                    document.getElementById('zoomLabel').textContent = zoom + '\u00d7';
+                }
+                applyZoom();
+                document.getElementById('zoomOut').onclick = () => {
+                    const i = ZOOM_STEPS.indexOf(zoom);
+                    if (i > 0) { zoom = ZOOM_STEPS[i - 1]; applyZoom(); }
+                };
+                document.getElementById('zoomIn').onclick = () => {
+                    const i = ZOOM_STEPS.indexOf(zoom);
+                    if (i < ZOOM_STEPS.length - 1) { zoom = ZOOM_STEPS[i + 1]; applyZoom(); }
+                };
                 drawState = function() {
                     ctx.drawImage(img, 0, 0); ctx.lineWidth = 3;
                     const labels = ['TL', 'TR', 'BR', 'BL'];
@@ -78,15 +108,15 @@ with open(f"{PTS_DIR}/index.html", "w") as f:
                 }
                 img.onload = () => { drawState(); };
                 canvas.addEventListener('mousedown', e => {
-                    const r = canvas.getBoundingClientRect(); const x = e.clientX - r.left; const y = e.clientY - r.top;
+                    const {x, y} = canvasCoords(e, canvas);
                     const hit = hitTest(x, y);
                     if (hit >= 0) { dragging = hit; }
                     else if (points.length < 4) { points.push({x, y}); drawState(); }
                 });
                 canvas.addEventListener('mousemove', e => {
                     if (dragging < 0) return;
-                    const r = canvas.getBoundingClientRect();
-                    points[dragging] = {x: e.clientX - r.left, y: e.clientY - r.top};
+                    const {x, y} = canvasCoords(e, canvas);
+                    points[dragging] = {x, y};
                     drawState();
                 });
                 canvas.addEventListener('mouseup', () => { dragging = -1; });
@@ -118,8 +148,16 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
     <html>
     <body style="margin:0; padding:0; background: transparent; color: white; font-family: sans-serif;">
       <div id="root">
-          <p style="margin:0 0 8px 0;font-size:13px;color:#d1d5db;">🖌️ Brush over anything that isn&#39;t part of the building surface — sky, scaffolding, vehicles, trees. This keeps the 3D texture clean. Click <strong>Save Mask</strong> when done.</p>
-          <canvas id="mycanvas" style="cursor:crosshair;border:1px solid #ff4b4b;border-radius:4px;"></canvas><br>
+          <p style="margin:0 0 6px 0;font-size:13px;color:#d1d5db;">🖌️ Brush over anything that isn&#39;t part of the building surface — sky, scaffolding, vehicles, trees. This keeps the 3D texture clean. Click <strong>Save Mask</strong> when done.</p>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-size:12px;color:#9ca3af;">Zoom:</span>
+            <button id="zoomOut" style="padding:1px 9px;background:#1f2937;color:white;border:1px solid #374151;border-radius:4px;cursor:pointer;font-size:15px;line-height:1.4;">&#8722;</button>
+            <span id="zoomLabel" style="font-size:12px;color:#d1d5db;min-width:28px;text-align:center;">1&times;</span>
+            <button id="zoomIn" style="padding:1px 9px;background:#1f2937;color:white;border:1px solid #374151;border-radius:4px;cursor:pointer;font-size:15px;line-height:1.4;">&#43;</button>
+          </div>
+          <div id="canvasWrap" style="overflow:auto;border:1px solid #ff4b4b;border-radius:4px;">
+            <canvas id="mycanvas" style="cursor:crosshair;display:block;"></canvas>
+          </div>
           <button id="btnClear" style="margin-top:8px;padding:8px 16px;background:#333;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Clear Brush</button>
           <button id="btnSend" style="margin-top:8px;padding:8px 16px;background:#ff4b4b;color:white;border:none;border-radius:4px;cursor:pointer;">Save Mask</button>
       </div>
@@ -127,12 +165,16 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
         function send(type, data) { window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*"); }
         send("streamlit:componentReady", {apiVersion: 1});
         let initialized = false;
+        let zoom = 1;
+        const ZOOM_STEPS = [1, 1.5, 2, 2.5, 3];
         window.addEventListener("message", function(event) {
             if (event.data.type === "streamlit:render" && !initialized) {
                 initialized = true; const args = event.data.args;
                 const canvas = document.getElementById('mycanvas');
+                const wrap = document.getElementById('canvasWrap');
                 canvas.width = args.canvas_w; canvas.height = args.canvas_h;
-                send("streamlit:setFrameHeight", {height: args.canvas_h + 130});
+                wrap.style.height = args.canvas_h + 'px';
+                send("streamlit:setFrameHeight", {height: args.canvas_h + 160});
                 const ctx = canvas.getContext('2d');
                 const offscreen = document.createElement('canvas');
                 offscreen.width = args.canvas_w; offscreen.height = args.canvas_h;
@@ -140,9 +182,25 @@ with open(f"{MASK_DIR}/index.html", "w") as f:
                 const img = new Image();
                 img.src = 'data:image/png;base64,' + args.img_b64;
                 img.onload = () => ctx.drawImage(img, 0, 0);
+                function applyZoom() {
+                    canvas.style.width  = (args.canvas_w * zoom) + 'px';
+                    canvas.style.height = (args.canvas_h * zoom) + 'px';
+                    document.getElementById('zoomLabel').textContent = zoom + '\u00d7';
+                }
+                applyZoom();
+                document.getElementById('zoomOut').onclick = () => {
+                    const i = ZOOM_STEPS.indexOf(zoom);
+                    if (i > 0) { zoom = ZOOM_STEPS[i - 1]; applyZoom(); }
+                };
+                document.getElementById('zoomIn').onclick = () => {
+                    const i = ZOOM_STEPS.indexOf(zoom);
+                    if (i < ZOOM_STEPS.length - 1) { zoom = ZOOM_STEPS[i + 1]; applyZoom(); }
+                };
                 let painting = false;
                 function draw(e) {
-                    const r = canvas.getBoundingClientRect(); const x = e.clientX - r.left; const y = e.clientY - r.top;
+                    const r = canvas.getBoundingClientRect();
+                    const x = (e.clientX - r.left) / zoom;
+                    const y = (e.clientY - r.top) / zoom;
                     ctx.fillStyle = 'rgba(255,0,0,0.4)'; ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI * 2); ctx.fill();
                     octx.fillStyle = 'rgba(255,0,0,1.0)'; octx.beginPath(); octx.arc(x, y, 15, 0, Math.PI * 2); octx.fill();
                 }
